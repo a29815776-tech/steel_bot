@@ -1,10 +1,12 @@
-from flask import Flask, request, abort, render_template, jsonify
+from flask import Flask, request, abort, render_template, jsonify, send_file
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (MessageEvent, TextMessage, TextSendMessage,
-                             ImageMessage, VideoMessage,
+                             ImageMessage, VideoMessage, ImageSendMessage,
                              QuickReply, QuickReplyButton, MessageAction)
 from groq import Groq
+from io import BytesIO
+import uuid
 import os
 import json
 
@@ -217,6 +219,9 @@ FLOOR_DATA = {"一樓施工":1,"2樓或電梯":2,"3樓":3,"4樓":4,"5樓":5,"頂
 AREA_OPTIONS = ["台北市", "新北市", "基隆", "宜蘭"]
 
 OWNER_LINE_ID = os.environ.get("OWNER_LINE_ID", "")
+BASE_URL = os.environ.get("BASE_URL", "https://steel-bot.onrender.com")
+
+image_store = {}  # {img_id: bytes}
 
 line_states = {}  # {user_id: {service, material, ping_range, ping, floor, area}}
 
@@ -349,13 +354,33 @@ def handle_message(event):
         TextSendMessage(text=quote + "\n\n如需再估一個請輸入「再估一個」\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷"))
 
 
+@app.route("/img/<img_id>")
+def serve_image(img_id):
+    if img_id in image_store:
+        return send_file(BytesIO(image_store[img_id]), mimetype="image/jpeg")
+    return "Not found", 404
+
 @handler.add(MessageEvent, message=(ImageMessage, VideoMessage))
 def handle_media(event):
     uid = event.source.user_id
-    media_type = "照片" if isinstance(event.message, ImageMessage) else "影片"
-    notify_owner(f"📷 客戶上傳了{media_type}\n用戶ID：{uid}")
+    if isinstance(event.message, ImageMessage):
+        content = line_bot_api.get_message_content(event.message.id)
+        img_bytes = b"".join(chunk for chunk in content.iter_content())
+        img_id = str(uuid.uuid4())
+        image_store[img_id] = img_bytes
+        img_url = f"{BASE_URL}/img/{img_id}"
+        if OWNER_LINE_ID:
+            try:
+                line_bot_api.push_message(OWNER_LINE_ID, [
+                    TextSendMessage(text=f"📷 客戶上傳了照片\n用戶ID：{uid}"),
+                    ImageSendMessage(original_content_url=img_url, preview_image_url=img_url)
+                ])
+            except Exception:
+                pass
+    else:
+        notify_owner(f"🎥 客戶上傳了影片\n用戶ID：{uid}")
     line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text=f"感謝您上傳{media_type}！老闆收到後會盡快與您聯絡。\n如需來電詢問：0973-687-898"))
+        TextSendMessage(text="感謝您上傳照片！老闆收到後會盡快與您聯絡。\n如需來電詢問：0973-687-898"))
 
 
 @app.route("/")
