@@ -205,8 +205,13 @@ def callback():
 
 
 PING_OPTIONS  = ["30坪以上", "30坪內", "20坪內", "10坪內"]
+PING_SUB_OPTIONS = {
+    "30坪以上": ["30坪", "35坪", "40坪", "45坪", "50坪"],
+    "30坪內":   ["20坪", "22坪", "25坪", "28坪", "29坪"],
+    "20坪內":   ["10坪", "12坪", "15坪", "18坪", "19坪"],
+    "10坪內":   ["5坪",  "6坪",  "7坪",  "8坪",  "9坪"],
+}
 FLOOR_OPTIONS = ["一樓施工", "2樓或電梯", "3樓", "4樓", "5樓", "頂加"]
-PING_DATA  = {"30坪以上":(35,1.00),"30坪內":(25,1.10),"20坪內":(15,1.15),"10坪內":(7,1.20)}
 FLOOR_DATA = {"一樓施工":1,"2樓或電梯":2,"3樓":3,"4樓":4,"5樓":5,"頂加":6}
 
 line_states = {}  # {user_id: {service, material, ping_label, floor_label}}
@@ -219,22 +224,24 @@ def quick(text, options):
         ])
     )
 
-def line_format_quote(service, material, ping_label, floor_label):
-    _, rate = PING_DATA[ping_label]
+def line_format_quote(service, material, ping, floor_label):
     floor = FLOOR_DATA[floor_label]
+    if ping < 10:   rate = 1.20
+    elif ping < 20: rate = 1.15
+    elif ping < 30: rate = 1.10
+    else:           rate = 1.00
     base_prices = {"天花板":{"石膏板":1350,"矽酸鈣板":1500},"輕隔間":{"石膏板":3000,"矽酸鈣板":4000}}
     floor_adds  = {"天花板":100,"輕隔間":150}
     base = base_prices[service][material]
     floor_add = floor_adds[service] * (floor - 1)
-    unit = round((base + floor_add) * rate)
+    total = round((base + floor_add) * ping * rate)
     lines = ["📋 報價明細", "─────────────",
              f"項目：{service}", f"材質：{material}",
-             f"坪數：{ping_label}", f"位置：{floor_label}", ""]
+             f"坪數：{int(ping)}坪", f"位置：{floor_label}", ""]
     lines.append(f"基本單價：{base:,}元/坪")
     if floor_add: lines.append(f"樓層加價：+{floor_add}元/坪")
     if rate > 1:  lines.append(f"小坪數加價：+{round((rate-1)*100)}%")
-    lines += ["", f"💰 施工單價：{unit:,} 元/坪",
-              f"   （總價 = {unit:,} × 實際坪數）",
+    lines += ["", f"💰 預估總價：{total:,} 元",
               "─────────────",
               "以上為預估價，實際費用依現場丈量為準。",
               "如需正式報價，請來電：0973-687-898"]
@@ -270,12 +277,21 @@ def handle_message(event):
                 quick("請選擇材質：", ["石膏板", "矽酸鈣板"]))
             return
 
-    if "ping" not in state:
+    if "ping_range" not in state:
         if msg in PING_OPTIONS:
-            state["ping"] = msg
+            state["ping_range"] = msg
         else:
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇施工坪數：", PING_OPTIONS))
+                quick("請選擇施工坪數範圍：", PING_OPTIONS))
+            return
+
+    if "ping" not in state:
+        sub_opts = PING_SUB_OPTIONS[state["ping_range"]]
+        if msg in sub_opts:
+            state["ping"] = float(msg.replace("坪", ""))
+        else:
+            line_bot_api.reply_message(event.reply_token,
+                quick("請選擇精確坪數：", sub_opts))
             return
 
     if "floor" not in state:

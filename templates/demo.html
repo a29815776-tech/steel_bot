@@ -182,12 +182,13 @@
             }, 600);
         }
 
-        const PING_OPTIONS = [
-            { label: '30坪以上', ping: 35, rate: 1.00 },
-            { label: '30坪內',   ping: 25, rate: 1.10 },
-            { label: '20坪內',   ping: 15, rate: 1.15 },
-            { label: '10坪內',   ping:  7, rate: 1.20 },
-        ];
+        const PING_RANGE_OPTIONS = ['30坪以上', '30坪內', '20坪內', '10坪內'];
+        const PING_SUB_OPTIONS = {
+            '30坪以上': ['30坪', '35坪', '40坪', '45坪', '50坪'],
+            '30坪內':   ['20坪', '22坪', '25坪', '28坪', '29坪'],
+            '20坪內':   ['10坪', '12坪', '15坪', '18坪', '19坪'],
+            '10坪內':   ['5坪',  '6坪',  '7坪',  '8坪',  '9坪'],
+        };
         const FLOOR_OPTIONS = [
             { label: '一樓施工',   floor: 1 },
             { label: '2樓或電梯', floor: 2 },
@@ -197,11 +198,20 @@
             { label: '頂加',      floor: 6 },
         ];
 
-        function showQuoteFromOptions(service, material, pingOpt, floorOpt) {
+        function getRate(ping) {
+            if (ping < 10) return 1.20;
+            if (ping < 20) return 1.15;
+            if (ping < 30) return 1.10;
+            return 1.00;
+        }
+
+        function showQuoteFromOptions(service, material, ping, floorOpt) {
             const base = PRICES[service][material];
             const floorAdd = FLOOR_ADD[service] * (floorOpt.floor - 1);
             const unitPrice = base + floorAdd;
-            const total = Math.round(unitPrice * pingOpt.ping * pingOpt.rate);
+            const rate = getRate(ping);
+            const total = Math.round(unitPrice * ping * rate);
+            const sizePct = Math.round((rate - 1) * 100);
 
             const d = document.createElement('div');
             d.className = 'msg bot';
@@ -209,12 +219,12 @@
                 <b>📋 報價明細</b><hr class="divider">
                 項目：${service}<br>
                 材質：${material}<br>
-                坪數：${pingOpt.label}<br>
+                坪數：${ping}坪<br>
                 施工位置：${floorOpt.label}<hr class="divider">
                 基本單價：${base.toLocaleString()}元/坪<br>`;
             if (floorAdd > 0) html += `樓層加價：+${floorAdd}元/坪<br>`;
-            if (pingOpt.rate > 1) html += `小坪數加價：+${Math.round((pingOpt.rate-1)*100)}%<br>`;
-            html += `<hr class="divider"><span class="total">💰 預估總價：約 ${total.toLocaleString()} 元起</span>
+            if (sizePct > 0) html += `小坪數加價：+${sizePct}%<br>`;
+            html += `<hr class="divider"><span class="total">💰 預估總價：${total.toLocaleString()} 元</span>
                 <hr class="divider" style="margin-top:8px">
                 <span style="font-size:12px;color:#888">以上為預估價，實際費用依現場丈量為準。<br>
                 如需正式報價，請來電：0973-687-898</span>
@@ -229,12 +239,15 @@
                 removeTyping();
                 showChoices('請選擇施工項目', ['天花板', '輕隔間'], service => {
                     setTimeout(() => showChoices('請選擇材質', ['石膏板', '矽酸鈣板'], material => {
-                        setTimeout(() => showChoices('請選擇施工坪數', PING_OPTIONS.map(o => o.label), pingLabel => {
-                            const pingOpt = PING_OPTIONS.find(o => o.label === pingLabel);
-                            setTimeout(() => showChoices('請選擇施工位置', FLOOR_OPTIONS.map(o => o.label), floorLabel => {
-                                const floorOpt = FLOOR_OPTIONS.find(o => o.label === floorLabel);
-                                setTimeout(() => showTyping(), 300);
-                                setTimeout(() => { removeTyping(); showQuoteFromOptions(service, material, pingOpt, floorOpt); askAnother(); }, 1000);
+                        setTimeout(() => showChoices('請選擇施工坪數範圍', PING_RANGE_OPTIONS, pingRange => {
+                            const subOpts = PING_SUB_OPTIONS[pingRange];
+                            setTimeout(() => showChoices('請選擇精確坪數', subOpts, pingLabel => {
+                                const ping = parseFloat(pingLabel.replace('坪', ''));
+                                setTimeout(() => showChoices('請選擇施工位置', FLOOR_OPTIONS.map(o => o.label), floorLabel => {
+                                    const floorOpt = FLOOR_OPTIONS.find(o => o.label === floorLabel);
+                                    setTimeout(() => showTyping(), 300);
+                                    setTimeout(() => { removeTyping(); showQuoteFromOptions(service, material, ping, floorOpt); askAnother(); }, 1000);
+                                }), 400);
                             }), 400);
                         }), 400);
                     }), 400);
