@@ -378,12 +378,12 @@ def handle_media(event):
         img_url = f"{BASE_URL}/img/{img_id}"
         if OWNER_LINE_ID:
             try:
-                line_bot_api.push_message(OWNER_LINE_ID, TextSendMessage(text=f"📷 客戶上傳了照片"))
+                line_bot_api.push_message(OWNER_LINE_ID, TextSendMessage(text="📷 客戶上傳了照片"))
                 line_bot_api.push_message(OWNER_LINE_ID, ImageSendMessage(original_content_url=img_url, preview_image_url=img_url))
             except Exception:
                 pass
     else:
-        notify_owner(f"🎥 客戶上傳了影片\n用戶ID：{uid}")
+        notify_owner("🎥 客戶上傳了影片")
     line_bot_api.reply_message(event.reply_token,
         TextSendMessage(text="感謝您上傳照片！老闆收到後會盡快與您聯絡。\n如需來電詢問：0973-687-898"))
 
