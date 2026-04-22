@@ -250,6 +250,20 @@ def line_format_quote(service, material, ping, floor_label, area):
              "如需正式報價，請來電：0973-687-898"]
     return "\n".join(lines)
 
+def smart_reply(user_message, state, next_prompt, options):
+    """AI 回應非預期輸入，最後引導回選單"""
+    labels = {"service":"施工項目","material":"材質","ping_range":"坪數範圍","ping":"坪數","floor":"樓層","area":"區域"}
+    known = "、".join(f"{labels[k]}={v}" for k,v in state.items() if v is not None and k in labels) or "尚未選擇"
+    system = f"""你是百工宅修工程行報價助理。客人正在報價流程中。
+已知：{known}。下一步：{next_prompt}（選項：{'、'.join(options)}）
+若客人問問題就簡短回答，若想重選告知可輸入「重新」。最後一句引導選擇{next_prompt}。純文字，不超過50字。"""
+    resp = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role":"system","content":system},{"role":"user","content":user_message}],
+        temperature=0.5, max_tokens=100,
+    )
+    return resp.choices[0].message.content.strip()
+
 def notify_owner(msg):
     if OWNER_LINE_ID:
         try:
@@ -280,16 +294,18 @@ def handle_message(event):
         if msg in ["天花板", "輕隔間"]:
             state["service"] = msg
         else:
+            opts = ["天花板", "輕隔間"]
             line_bot_api.reply_message(event.reply_token,
-                quick("您好！請選擇施工項目：", ["天花板", "輕隔間"]))
+                quick(smart_reply(msg, state, "施工項目", opts), opts))
             return
 
     if "material" not in state:
         if msg in ["石膏板", "矽酸鈣板"]:
             state["material"] = msg
         else:
+            opts = ["石膏板", "矽酸鈣板"]
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇材質：", ["石膏板", "矽酸鈣板"]))
+                quick(smart_reply(msg, state, "材質", opts), opts))
             return
 
     if "ping_range" not in state:
@@ -297,7 +313,7 @@ def handle_message(event):
             state["ping_range"] = msg
         else:
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇施工坪數範圍：", PING_OPTIONS))
+                quick(smart_reply(msg, state, "坪數範圍", PING_OPTIONS), PING_OPTIONS))
             return
 
     if "ping" not in state:
@@ -306,7 +322,7 @@ def handle_message(event):
             state["ping"] = float(msg.replace("坪", ""))
         else:
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇精確坪數：", sub_opts))
+                quick(smart_reply(msg, state, "精確坪數", sub_opts), sub_opts))
             return
 
     if "floor" not in state:
@@ -314,7 +330,7 @@ def handle_message(event):
             state["floor"] = msg
         else:
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇施工位置：", FLOOR_OPTIONS))
+                quick(smart_reply(msg, state, "施工位置", FLOOR_OPTIONS), FLOOR_OPTIONS))
             return
 
     if "area" not in state:
@@ -322,7 +338,7 @@ def handle_message(event):
             state["area"] = msg
         else:
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇施工區域：", AREA_OPTIONS))
+                quick(smart_reply(msg, state, "施工區域", AREA_OPTIONS), AREA_OPTIONS))
             return
 
     # 全部齊了，出報價
