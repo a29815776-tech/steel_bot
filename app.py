@@ -244,30 +244,21 @@ def handle_message(event):
     uid = event.source.user_id
     msg = event.message.text.strip()
 
+    if msg in ["重新", "重來", "再估一個", "開始", "報價"]:
+        line_states[uid] = {}
+
     if uid not in line_states:
         line_states[uid] = {}
 
     state = line_states[uid]
 
-    # 重新開始
-    if msg in ["重新", "重來", "再估一個", "開始"]:
-        line_states[uid] = {}
-        state = {}
-
+    # 依序填入資訊
     if "service" not in state:
-        line_bot_api.reply_message(event.reply_token,
-            quick("您好！請選擇施工項目：", ["天花板", "輕隔間"]))
-        return
-
-    if msg in ["天花板", "輕隔間"] and "service" not in state:
-        pass
-
-    if "service" not in state or msg in ["天花板", "輕隔間"]:
         if msg in ["天花板", "輕隔間"]:
             state["service"] = msg
         else:
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇施工項目：", ["天花板", "輕隔間"]))
+                quick("您好！請選擇施工項目：", ["天花板", "輕隔間"]))
             return
 
     if "material" not in state:
@@ -296,7 +287,7 @@ def handle_message(event):
 
     # 全部齊了，出報價
     quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"])
-    line_states[uid] = {}  # 重置
+    line_states[uid] = {}
     line_bot_api.reply_message(event.reply_token,
         TextSendMessage(text=quote + "\n\n如需再估一個請輸入「再估一個」"))
 
