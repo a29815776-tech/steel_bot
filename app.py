@@ -252,6 +252,11 @@ def handle_message(event):
     uid = event.source.user_id
     msg = event.message.text.strip()
 
+    if msg == "我的id":
+        line_bot_api.reply_message(event.reply_token,
+            TextSendMessage(text=f"您的 ID：{uid}"))
+        return
+
     if msg in ["重新", "重來", "再估一個", "開始", "報價"]:
         line_states[uid] = {}
 
