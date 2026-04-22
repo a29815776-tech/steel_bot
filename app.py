@@ -251,8 +251,7 @@ def line_format_quote(service, material, ping, floor_label, area):
              "─────────────",
              f"💰 預估總價：{total:,} 元",
              "─────────────",
-             "以上為預估價，實際費用依現場丈量為準。",
-             "如需正式報價，請來電：0973-687-898"]
+             "以上為預估價，實際費用依現場丈量為準。"]
     return "\n".join(lines)
 
 def smart_reply(user_message, state, next_prompt, options):
@@ -288,13 +287,6 @@ def handle_message(event):
 
     if msg in ["重新", "重來", "再估一個", "開始", "報價"]:
         line_states[uid] = {}
-    elif line_states.get(uid, {}).get("waiting_contact"):
-        if msg != "不用":
-            notify_owner(f"📞 客戶留下聯絡方式：{msg}")
-        line_states[uid] = {}
-        line_bot_api.reply_message(event.reply_token,
-            TextSendMessage(text="收到！師傅會盡快與您聯絡 😊\n如需再估一個請輸入「再估一個」"))
-        return
 
     if uid not in line_states:
         line_states[uid] = {}
@@ -356,9 +348,9 @@ def handle_message(event):
     # 全部齊了，出報價
     quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"], state["area"])
     notify_owner(f"🔔 新報價通知\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{quote.split('💰')[1].split('元')[0].strip()} 元")
-    line_states[uid] = {"waiting_contact": True}
+    line_states[uid] = {}
     line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text=quote + "\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷\n\n請問方便留下電話或 LINE ID 嗎？師傅可主動與您聯繫（不方便可直接輸入「不用」）"))
+        TextSendMessage(text=quote + "\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷\n\n如需正式報價或預約，歡迎直接加師傅 LINE：0973687898"))
 
 
 @app.route("/img/<img_id>")
