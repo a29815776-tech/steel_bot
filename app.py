@@ -220,20 +220,21 @@ def quick(text, options):
     )
 
 def line_format_quote(service, material, ping_label, floor_label):
-    ping, rate = PING_DATA[ping_label]
+    _, rate = PING_DATA[ping_label]
     floor = FLOOR_DATA[floor_label]
     base_prices = {"天花板":{"石膏板":1350,"矽酸鈣板":1500},"輕隔間":{"石膏板":3000,"矽酸鈣板":4000}}
     floor_adds  = {"天花板":100,"輕隔間":150}
     base = base_prices[service][material]
     floor_add = floor_adds[service] * (floor - 1)
-    total = round((base + floor_add) * ping * rate)
+    unit = round((base + floor_add) * rate)
     lines = ["📋 報價明細", "─────────────",
              f"項目：{service}", f"材質：{material}",
              f"坪數：{ping_label}", f"位置：{floor_label}", ""]
     lines.append(f"基本單價：{base:,}元/坪")
     if floor_add: lines.append(f"樓層加價：+{floor_add}元/坪")
     if rate > 1:  lines.append(f"小坪數加價：+{round((rate-1)*100)}%")
-    lines += ["", f"💰 預估總價：約 {total:,} 元起",
+    lines += ["", f"💰 施工單價：{unit:,} 元/坪",
+              f"   （總價 = {unit:,} × 實際坪數）",
               "─────────────",
               "以上為預估價，實際費用依現場丈量為準。",
               "如需正式報價，請來電：0973-687-898"]
