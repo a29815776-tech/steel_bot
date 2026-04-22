@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>百工宅修 AI 報價助理</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: Arial, sans-serif; background: #f0f0f0; min-height: 100vh; display: flex; flex-direction: column; }
+        .header {
+            background: #06c755; color: white;
+            padding: 16px 20px; display: flex; align-items: center; gap: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .avatar { width: 42px; height: 42px; background: white; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+        .header-info h1 { font-size: 16px; }
+        .header-info p { font-size: 12px; opacity: 0.85; margin-top: 2px; }
+        .demo-badge { background: rgba(0,0,0,0.15); font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: auto; }
+
+        .chat-area { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+        .msg { display: flex; align-items: flex-end; gap: 8px; }
+        .msg.bot { align-self: flex-start; max-width: 85%; }
+        .msg.user { align-self: flex-end; flex-direction: row-reverse; max-width: 75%; }
+        .bot-avatar { width: 36px; height: 36px; background: #06c755; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+        .bubble { padding: 10px 14px; border-radius: 18px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+        .bot .bubble { background: white; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .user .bubble { background: #06c755; color: white; border-bottom-right-radius: 4px; }
+
+        /* 選單卡片 */
+        .menu-card { background: white; border-radius: 16px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); max-width: 85%; align-self: flex-start; }
+        .menu-card .label { font-size: 13px; color: #888; margin-bottom: 10px; }
+        .btn-group { display: flex; flex-wrap: wrap; gap: 8px; }
+        .choice-btn {
+            padding: 10px 18px; border: 2px solid #06c755; border-radius: 20px;
+            background: white; color: #06c755; font-size: 14px; cursor: pointer; transition: all 0.15s;
+        }
+        .choice-btn:hover { background: #06c755; color: white; }
+        .choice-btn:disabled { border-color: #ddd; color: #aaa; cursor: not-allowed; background: white; }
+
+        .input-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+        .num-input { flex: 1; padding: 10px 14px; border: 2px solid #ddd; border-radius: 20px; font-size: 15px; outline: none; }
+        .num-input:focus { border-color: #06c755; }
+        .confirm-btn { padding: 10px 18px; background: #06c755; color: white; border: none; border-radius: 20px; font-size: 14px; cursor: pointer; }
+        .confirm-btn:disabled { background: #ccc; cursor: not-allowed; }
+
+        .typing { display: flex; align-items: center; gap: 4px; padding: 12px 14px; }
+        .typing span { width: 8px; height: 8px; background: #aaa; border-radius: 50%; animation: bounce 1.2s infinite; }
+        .typing span:nth-child(2) { animation-delay: 0.2s; }
+        .typing span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
+
+        .quote-box { background: white; border-radius: 16px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); max-width: 90%; align-self: flex-start; font-size: 14px; line-height: 1.9; }
+        .quote-box .total { font-size: 18px; font-weight: bold; color: #06c755; }
+        .divider { border: none; border-top: 1px solid #eee; margin: 8px 0; }
+
+        .restart-btn { margin: 8px auto; display: block; padding: 10px 24px; background: #f0f0f0; border: 1px solid #ddd; border-radius: 20px; font-size: 13px; color: #666; cursor: pointer; }
+        .restart-btn:hover { background: #e0e0e0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="avatar">🏠</div>
+        <div class="header-info">
+            <h1>百工宅修工程行</h1>
+            <p>AI 報價助理</p>
+        </div>
+        <span class="demo-badge">DEMO</span>
+    </div>
+    <div class="chat-area" id="chat"></div>
+
+    <script>
+        const chat = document.getElementById('chat');
+        const PRICES = {
+            '天花板': { '石膏板': 1350, '矽酸鈣板': 1500 },
+            '輕隔間': { '石膏板': 3000, '矽酸鈣板': 4000 }
+        };
+        const FLOOR_ADD = { '天花板': 100, '輕隔間': 150 };
+
+        function scroll() { chat.scrollTop = chat.scrollHeight; }
+
+        function botMsg(text) {
+            const d = document.createElement('div');
+            d.className = 'msg bot';
+            d.innerHTML = `<div class="bot-avatar">🏠</div><div class="bubble">${text}</div>`;
+            chat.appendChild(d); scroll();
+        }
+
+        function userMsg(text) {
+            const d = document.createElement('div');
+            d.className = 'msg user';
+            d.innerHTML = `<div class="bubble">${text}</div>`;
+            chat.appendChild(d); scroll();
+        }
+
+        function showTyping() {
+            const d = document.createElement('div');
+            d.className = 'msg bot'; d.id = 'typing';
+            d.innerHTML = `<div class="bot-avatar">🏠</div><div class="bubble typing"><span></span><span></span><span></span></div>`;
+            chat.appendChild(d); scroll();
+        }
+
+        function removeTyping() { const t = document.getElementById('typing'); if (t) t.remove(); }
+
+        function showChoices(label, choices, onSelect) {
+            const d = document.createElement('div');
+            d.className = 'menu-card';
+            d.innerHTML = `<div class="label">${label}</div><div class="btn-group">${
+                choices.map(c => `<button class="choice-btn">${c}</button>`).join('')
+            }</div>`;
+            d.querySelectorAll('.choice-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    d.querySelectorAll('.choice-btn').forEach(b => { b.disabled = true; b.style.borderColor='#ddd'; b.style.color='#aaa'; });
+                    btn.style.background = '#06c755'; btn.style.color = 'white'; btn.style.borderColor = '#06c755';
+                    userMsg(btn.textContent);
+                    onSelect(btn.textContent);
+                });
+            });
+            chat.appendChild(d); scroll();
+        }
+
+        function showNumberInput(label, unit, onConfirm) {
+            const d = document.createElement('div');
+            d.className = 'menu-card';
+            d.innerHTML = `<div class="label">${label}</div>
+                <div class="input-row">
+                    <input class="num-input" type="number" min="1" max="999" placeholder="輸入數字">
+                    <span style="font-size:14px;color:#555">${unit}</span>
+                    <button class="confirm-btn" disabled>確認</button>
+                </div>`;
+            const input = d.querySelector('.num-input');
+            const btn = d.querySelector('.confirm-btn');
+            input.addEventListener('input', () => { btn.disabled = !input.value || input.value <= 0; });
+            btn.addEventListener('click', () => {
+                const val = parseFloat(input.value);
+                input.disabled = true; btn.disabled = true;
+                userMsg(val + unit);
+                onConfirm(val);
+            });
+            input.addEventListener('keydown', e => { if (e.key === 'Enter' && !btn.disabled) btn.click(); });
+            chat.appendChild(d); scroll();
+            setTimeout(() => input.focus(), 100);
+        }
+
+        function showQuote(service, material, ping, floor) {
+            const base = PRICES[service][material];
+            const floorAdd = FLOOR_ADD[service] * (floor - 1);
+            const unitPrice = base + floorAdd;
+            let sizeRate = 1.0, sizePct = 0, sizeLabel = '';
+            if (ping < 10)      { sizeRate = 1.20; sizePct = 20; sizeLabel = '未滿10坪'; }
+            else if (ping < 20) { sizeRate = 1.15; sizePct = 15; sizeLabel = '未滿20坪'; }
+            else if (ping < 30) { sizeRate = 1.10; sizePct = 10; sizeLabel = '未滿30坪'; }
+            const total = Math.round(unitPrice * ping * sizeRate);
+
+            const d = document.createElement('div');
+            d.className = 'msg bot';
+            let html = `<div class="bot-avatar">🏠</div><div class="quote-box">
+                <b>📋 報價明細</b><hr class="divider">
+                項目：${service}<br>
+                材質：${material}<br>
+                坪數：${ping}坪<br>
+                樓層：${floor}樓<hr class="divider">
+                基本單價：${base.toLocaleString()}元/坪<br>`;
+            if (floorAdd > 0) html += `樓層加價：+${FLOOR_ADD[service]}×${floor-1} = +${floorAdd}元/坪<br>`;
+            if (sizePct > 0)  html += `小坪數加價：+${sizePct}%（${sizeLabel}）<br>`;
+            html += `<hr class="divider"><span class="total">💰 預估總價：${total.toLocaleString()} 元</span>
+                <hr class="divider" style="margin-top:8px">
+                <span style="font-size:12px;color:#888">以上為預估價，實際費用依現場丈量為準。<br>
+                如需正式報價，請來電：0973-687-898</span>
+            </div>`;
+            d.innerHTML = html;
+            chat.appendChild(d); scroll();
+        }
+
+        function askAnother() {
+            setTimeout(() => {
+                botMsg('還需要估算其他項目嗎？');
+                setTimeout(() => showChoices('', ['要，再估一個', '不用，謝謝'], choice => {
+                    if (choice === '要，再估一個') startFlow();
+                    else botMsg('好的！如需正式報價或有其他問題，歡迎來電 0973-687-898 😊');
+                }), 300);
+            }, 600);
+        }
+
+        const PING_OPTIONS = [
+            { label: '30坪以上', ping: 35, rate: 1.00 },
+            { label: '30坪內',   ping: 25, rate: 1.10 },
+            { label: '20坪內',   ping: 15, rate: 1.15 },
+            { label: '10坪內',   ping:  7, rate: 1.20 },
+        ];
+        const FLOOR_OPTIONS = [
+            { label: '一樓施工',   floor: 1 },
+            { label: '2樓或電梯', floor: 2 },
+            { label: '3樓',       floor: 3 },
+            { label: '4樓',       floor: 4 },
+            { label: '5樓',       floor: 5 },
+            { label: '頂加',      floor: 6 },
+        ];
+
+        function showQuoteFromOptions(service, material, pingOpt, floorOpt) {
+            const base = PRICES[service][material];
+            const floorAdd = FLOOR_ADD[service] * (floorOpt.floor - 1);
+            const unitPrice = base + floorAdd;
+            const total = Math.round(unitPrice * pingOpt.ping * pingOpt.rate);
+
+            const d = document.createElement('div');
+            d.className = 'msg bot';
+            let html = `<div class="bot-avatar">🏠</div><div class="quote-box">
+                <b>📋 報價明細</b><hr class="divider">
+                項目：${service}<br>
+                材質：${material}<br>
+                坪數：${pingOpt.label}<br>
+                施工位置：${floorOpt.label}<hr class="divider">
+                基本單價：${base.toLocaleString()}元/坪<br>`;
+            if (floorAdd > 0) html += `樓層加價：+${floorAdd}元/坪<br>`;
+            if (pingOpt.rate > 1) html += `小坪數加價：+${Math.round((pingOpt.rate-1)*100)}%<br>`;
+            html += `<hr class="divider"><span class="total">💰 預估總價：約 ${total.toLocaleString()} 元起</span>
+                <hr class="divider" style="margin-top:8px">
+                <span style="font-size:12px;color:#888">以上為預估價，實際費用依現場丈量為準。<br>
+                如需正式報價，請來電：0973-687-898</span>
+            </div>`;
+            d.innerHTML = html;
+            chat.appendChild(d); scroll();
+        }
+
+        function startFlow() {
+            setTimeout(() => showTyping(), 300);
+            setTimeout(() => {
+                removeTyping();
+                showChoices('請選擇施工項目', ['天花板', '輕隔間'], service => {
+                    setTimeout(() => showChoices('請選擇材質', ['石膏板', '矽酸鈣板'], material => {
+                        setTimeout(() => showChoices('請選擇施工坪數', PING_OPTIONS.map(o => o.label), pingLabel => {
+                            const pingOpt = PING_OPTIONS.find(o => o.label === pingLabel);
+                            setTimeout(() => showChoices('請選擇施工位置', FLOOR_OPTIONS.map(o => o.label), floorLabel => {
+                                const floorOpt = FLOOR_OPTIONS.find(o => o.label === floorLabel);
+                                setTimeout(() => showTyping(), 300);
+                                setTimeout(() => { removeTyping(); showQuoteFromOptions(service, material, pingOpt, floorOpt); askAnother(); }, 1000);
+                            }), 400);
+                        }), 400);
+                    }), 400);
+                });
+            }, 800);
+        }
+
+        // 開始
+        setTimeout(() => {
+            botMsg('您好！我是百工宅修的 AI 報價助理 🏠\n\n請選擇您需要估算的項目：');
+            startFlow();
+        }, 500);
+    </script>
+</body>
+</html>
