@@ -2,6 +2,7 @@ from flask import Flask, request, abort, render_template, jsonify
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (MessageEvent, TextMessage, TextSendMessage,
+                             ImageMessage, VideoMessage,
                              QuickReply, QuickReplyButton, MessageAction)
 from groq import Groq
 import os
@@ -213,8 +214,11 @@ PING_SUB_OPTIONS = {
 }
 FLOOR_OPTIONS = ["一樓施工", "2樓或電梯", "3樓", "4樓", "5樓", "頂加"]
 FLOOR_DATA = {"一樓施工":1,"2樓或電梯":2,"3樓":3,"4樓":4,"5樓":5,"頂加":6}
+AREA_OPTIONS = ["台北市", "新北市", "基隆", "宜蘭"]
 
-line_states = {}  # {user_id: {service, material, ping_label, floor_label}}
+OWNER_LINE_ID = os.environ.get("OWNER_LINE_ID", "")
+
+line_states = {}  # {user_id: {service, material, ping_range, ping, floor, area}}
 
 def quick(text, options):
     return TextSendMessage(
@@ -224,7 +228,7 @@ def quick(text, options):
         ])
     )
 
-def line_format_quote(service, material, ping, floor_label):
+def line_format_quote(service, material, ping, floor_label, area):
     floor = FLOOR_DATA[floor_label]
     if ping < 10:   rate = 1.20
     elif ping < 20: rate = 1.15
@@ -235,17 +239,23 @@ def line_format_quote(service, material, ping, floor_label):
     base = base_prices[service][material]
     floor_add = floor_adds[service] * (floor - 1)
     total = round((base + floor_add) * ping * rate)
-    lines = ["📋 報價明細", "─────────────",
+    lines = ["📋 報價結果", "─────────────",
              f"項目：{service}", f"材質：{material}",
-             f"坪數：{int(ping)}坪", f"位置：{floor_label}", ""]
-    lines.append(f"基本單價：{base:,}元/坪")
-    if floor_add: lines.append(f"樓層加價：+{floor_add}元/坪")
-    if rate > 1:  lines.append(f"小坪數加價：+{round((rate-1)*100)}%")
-    lines += ["", f"💰 預估總價：{total:,} 元",
-              "─────────────",
-              "以上為預估價，實際費用依現場丈量為準。",
-              "如需正式報價，請來電：0973-687-898"]
+             f"坪數：{int(ping)}坪", f"位置：{floor_label}",
+             f"區域：{area}",
+             "─────────────",
+             f"💰 預估總價：{total:,} 元",
+             "─────────────",
+             "以上為預估價，實際費用依現場丈量為準。",
+             "如需正式報價，請來電：0973-687-898"]
     return "\n".join(lines)
+
+def notify_owner(msg):
+    if OWNER_LINE_ID:
+        try:
+            line_bot_api.push_message(OWNER_LINE_ID, TextSendMessage(text=msg))
+        except Exception:
+            pass
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -307,11 +317,29 @@ def handle_message(event):
                 quick("請選擇施工位置：", FLOOR_OPTIONS))
             return
 
+    if "area" not in state:
+        if msg in AREA_OPTIONS:
+            state["area"] = msg
+        else:
+            line_bot_api.reply_message(event.reply_token,
+                quick("請選擇施工區域：", AREA_OPTIONS))
+            return
+
     # 全部齊了，出報價
-    quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"])
+    quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"], state["area"])
+    notify_owner(f"🔔 新報價通知\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{quote.split('💰')[1].split('元')[0].strip()} 元")
     line_states[uid] = {}
     line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text=quote + "\n\n如需再估一個請輸入「再估一個」"))
+        TextSendMessage(text=quote + "\n\n如需再估一個請輸入「再估一個」\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷"))
+
+
+@handler.add(MessageEvent, message=(ImageMessage, VideoMessage))
+def handle_media(event):
+    uid = event.source.user_id
+    media_type = "照片" if isinstance(event.message, ImageMessage) else "影片"
+    notify_owner(f"📷 客戶上傳了{media_type}\n用戶ID：{uid}")
+    line_bot_api.reply_message(event.reply_token,
+        TextSendMessage(text=f"感謝您上傳{media_type}！老闆收到後會盡快與您聯絡。\n如需來電詢問：0973-687-898"))
 
 
 @app.route("/")

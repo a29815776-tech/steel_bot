@@ -182,6 +182,7 @@
             }, 600);
         }
 
+        const AREA_OPTIONS = ['台北市', '新北市', '基隆', '宜蘭'];
         const PING_RANGE_OPTIONS = ['30坪以上', '30坪內', '20坪內', '10坪內'];
         const PING_SUB_OPTIONS = {
             '30坪以上': ['30坪', '35坪', '40坪', '45坪', '50坪'],
@@ -205,26 +206,23 @@
             return 1.00;
         }
 
-        function showQuoteFromOptions(service, material, ping, floorOpt) {
+        function showQuoteFromOptions(service, material, ping, floorOpt, area) {
             const base = PRICES[service][material];
             const floorAdd = FLOOR_ADD[service] * (floorOpt.floor - 1);
             const unitPrice = base + floorAdd;
             const rate = getRate(ping);
             const total = Math.round(unitPrice * ping * rate);
-            const sizePct = Math.round((rate - 1) * 100);
 
             const d = document.createElement('div');
             d.className = 'msg bot';
             let html = `<div class="bot-avatar">🏠</div><div class="quote-box">
-                <b>📋 報價明細</b><hr class="divider">
+                <b>📋 報價結果</b><hr class="divider">
                 項目：${service}<br>
                 材質：${material}<br>
                 坪數：${ping}坪<br>
-                施工位置：${floorOpt.label}<hr class="divider">
-                基本單價：${base.toLocaleString()}元/坪<br>`;
-            if (floorAdd > 0) html += `樓層加價：+${floorAdd}元/坪<br>`;
-            if (sizePct > 0) html += `小坪數加價：+${sizePct}%<br>`;
-            html += `<hr class="divider"><span class="total">💰 預估總價：${total.toLocaleString()} 元</span>
+                位置：${floorOpt.label}<br>
+                區域：${area}<hr class="divider">
+                <span class="total">💰 預估總價：${total.toLocaleString()} 元</span>
                 <hr class="divider" style="margin-top:8px">
                 <span style="font-size:12px;color:#888">以上為預估價，實際費用依現場丈量為準。<br>
                 如需正式報價，請來電：0973-687-898</span>
@@ -245,8 +243,10 @@
                                 const ping = parseFloat(pingLabel.replace('坪', ''));
                                 setTimeout(() => showChoices('請選擇施工位置', FLOOR_OPTIONS.map(o => o.label), floorLabel => {
                                     const floorOpt = FLOOR_OPTIONS.find(o => o.label === floorLabel);
-                                    setTimeout(() => showTyping(), 300);
-                                    setTimeout(() => { removeTyping(); showQuoteFromOptions(service, material, ping, floorOpt); askAnother(); }, 1000);
+                                    setTimeout(() => showChoices('請選擇施工區域', AREA_OPTIONS, area => {
+                                        setTimeout(() => showTyping(), 300);
+                                        setTimeout(() => { removeTyping(); showQuoteFromOptions(service, material, ping, floorOpt, area); askAnother(); }, 1000);
+                                    }), 400);
                                 }), 400);
                             }), 400);
                         }), 400);
