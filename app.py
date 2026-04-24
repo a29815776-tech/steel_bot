@@ -311,8 +311,10 @@ def handle_message(event):
             state["service"] = msg
         else:
             opts = ["天花板", "輕隔間"]
+            is_new = not any(state.values())
+            greeting = "歡迎來到百工宅修！\n專業輕鋼架、天花板、輕隔間工程服務 🏠\n\n請點選您要的裝修需求：" if is_new else smart_reply(msg, state, "施工項目", opts)
             line_bot_api.reply_message(event.reply_token,
-                quick(smart_reply(msg, state, "施工項目", opts), opts))
+                quick(greeting, opts))
             return
 
     if "material" not in state:
