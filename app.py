@@ -258,19 +258,27 @@ def line_format_quote(service, material, ping, floor_label, area):
 def smart_reply(user_message, state, next_prompt, options):
     """AI 判斷是否需要顯示選單，回傳 (text, show_menu)"""
     labels = {"service":"施工項目","material":"材質","ping_range":"坪數範圍","ping":"坪數","floor":"樓層","area":"區域"}
-    known = "、".join(f"{labels[k]}={v}" for k,v in state.items() if v is not None and k in labels) or "尚未選擇"
-    system = f"""你是百工宅修工程行報價助理。客人正在報價流程中。
-已知：{known}。下一步需要選擇：{next_prompt}（選項：{'、'.join(options)}）
+    known = "、".join(f"{labels[k]}={v}" for k,v in state.items() if v is not None and k in labels)
+    has_state = bool(known)
+    context = f"客人正在報價流程中，已知：{known}，下一步選擇：{next_prompt}（選項：{'、'.join(options)}）" if has_state else "客人尚未開始報價流程。"
+    system = f"""你是百工宅修工程行的 AI 報價助理，專做天花板和輕隔間工程。
+{context}
 
-判斷客人訊息並回覆：
-- 若是問候、閒聊、或與報價完全無關 → 格式：CHAT:簡短回覆
-- 若與報價相關、想重選、或需要引導 → 格式：MENU:引導文字（若想重選可輸入「重新」）
+判斷客人訊息，用以下格式回覆：
+CHAT: → 直接回答，不顯示選單（適用：問你是誰、問服務範圍、問價格概念、閒聊等）
+MENU: → 回答後顯示選單（適用：問候想開始報價、與目前步驟相關、需要繼續流程）
 
-純文字，不超過50字，只回覆以上格式。"""
+規則：
+- 問「你是誰」→ CHAT:介紹自己是百工宅修報價助理
+- 問「還有別的服務嗎」→ CHAT:目前提供天花板和輕隔間工程，如需報價請告知
+- 說「你好/哈囉」等問候 → MENU:歡迎來到百工宅修！請選擇您要的裝修需求：
+- 想重選 → MENU:沒問題，請重新選擇（或輸入「重新」從頭開始）
+
+純文字不超過60字，只回覆 CHAT: 或 MENU: 開頭。"""
     resp = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role":"system","content":system},{"role":"user","content":user_message}],
-        temperature=0.5, max_tokens=100,
+        temperature=0.4, max_tokens=120,
     )
     raw = resp.choices[0].message.content.strip()
     if raw.startswith("CHAT:"):
@@ -321,14 +329,12 @@ def handle_message(event):
             state["service"] = msg
         else:
             opts = ["天花板", "輕隔間"]
-            is_new = not any(state.values())
-            if is_new:
-                reply_text = "歡迎來到百工宅修！\n專業輕鋼架、天花板、輕隔間工程服務 🏠\n\n或點此加師傅個人 LINE 直接詢問：\nhttps://line.me/ti/p/~0973687898\n\n請點選您要的裝修需求："
-                line_bot_api.reply_message(event.reply_token, quick(reply_text, opts))
+            text, show_menu = smart_reply(msg, state, "施工項目", opts)
+            if show_menu:
+                full_text = text + "\n\n或點此加師傅 LINE 直接詢問：\nhttps://line.me/ti/p/~0973687898"
+                line_bot_api.reply_message(event.reply_token, quick(full_text, opts))
             else:
-                text, show_menu = smart_reply(msg, state, "施工項目", opts)
-                line_bot_api.reply_message(event.reply_token,
-                    quick(text, opts) if show_menu else TextSendMessage(text=text))
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
             return
 
     if "material" not in state:
