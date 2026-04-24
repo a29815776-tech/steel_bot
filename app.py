@@ -312,7 +312,7 @@ def handle_message(event):
         else:
             opts = ["天花板", "輕隔間"]
             is_new = not any(state.values())
-            greeting = "歡迎來到百工宅修！\n專業輕鋼架、天花板、輕隔間工程服務 🏠\n\n請點選您要的裝修需求：" if is_new else smart_reply(msg, state, "施工項目", opts)
+            greeting = "歡迎來到百工宅修！\n專業輕鋼架、天花板、輕隔間工程服務 🏠\n\n或點此加師傅個人 LINE 直接詢問：\nhttps://line.me/ti/p/~0973687898\n\n請點選您要的裝修需求：" if is_new else smart_reply(msg, state, "施工項目", opts)
             line_bot_api.reply_message(event.reply_token,
                 quick(greeting, opts))
             return
