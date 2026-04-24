@@ -256,18 +256,28 @@ def line_format_quote(service, material, ping, floor_label, area):
     return "\n".join(lines)
 
 def smart_reply(user_message, state, next_prompt, options):
-    """AI 回應非預期輸入，最後引導回選單"""
+    """AI 判斷是否需要顯示選單，回傳 (text, show_menu)"""
     labels = {"service":"施工項目","material":"材質","ping_range":"坪數範圍","ping":"坪數","floor":"樓層","area":"區域"}
     known = "、".join(f"{labels[k]}={v}" for k,v in state.items() if v is not None and k in labels) or "尚未選擇"
     system = f"""你是百工宅修工程行報價助理。客人正在報價流程中。
-已知：{known}。下一步：{next_prompt}（選項：{'、'.join(options)}）
-若客人問問題就簡短回答，若想重選告知可輸入「重新」。最後一句引導選擇{next_prompt}。純文字，不超過50字。"""
+已知：{known}。下一步需要選擇：{next_prompt}（選項：{'、'.join(options)}）
+
+判斷客人訊息並回覆：
+- 若是問候、閒聊、或與報價完全無關 → 格式：CHAT:簡短回覆
+- 若與報價相關、想重選、或需要引導 → 格式：MENU:引導文字（若想重選可輸入「重新」）
+
+純文字，不超過50字，只回覆以上格式。"""
     resp = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role":"system","content":system},{"role":"user","content":user_message}],
         temperature=0.5, max_tokens=100,
     )
-    return resp.choices[0].message.content.strip()
+    raw = resp.choices[0].message.content.strip()
+    if raw.startswith("CHAT:"):
+        return raw[5:].strip(), False
+    elif raw.startswith("MENU:"):
+        return raw[5:].strip(), True
+    return raw, True
 
 def notify_owner(msg):
     if OWNER_LINE_ID:
@@ -312,9 +322,13 @@ def handle_message(event):
         else:
             opts = ["天花板", "輕隔間"]
             is_new = not any(state.values())
-            greeting = "歡迎來到百工宅修！\n專業輕鋼架、天花板、輕隔間工程服務 🏠\n\n或點此加師傅個人 LINE 直接詢問：\nhttps://line.me/ti/p/~0973687898\n\n請點選您要的裝修需求：" if is_new else smart_reply(msg, state, "施工項目", opts)
-            line_bot_api.reply_message(event.reply_token,
-                quick(greeting, opts))
+            if is_new:
+                reply_text = "歡迎來到百工宅修！\n專業輕鋼架、天花板、輕隔間工程服務 🏠\n\n或點此加師傅個人 LINE 直接詢問：\nhttps://line.me/ti/p/~0973687898\n\n請點選您要的裝修需求："
+                line_bot_api.reply_message(event.reply_token, quick(reply_text, opts))
+            else:
+                text, show_menu = smart_reply(msg, state, "施工項目", opts)
+                line_bot_api.reply_message(event.reply_token,
+                    quick(text, opts) if show_menu else TextSendMessage(text=text))
             return
 
     if "material" not in state:
@@ -322,16 +336,18 @@ def handle_message(event):
             state["material"] = msg
         else:
             opts = ["石膏板", "矽酸鈣板"]
+            text, show_menu = smart_reply(msg, state, "材質", opts)
             line_bot_api.reply_message(event.reply_token,
-                quick(smart_reply(msg, state, "材質", opts), opts))
+                quick(text, opts) if show_menu else TextSendMessage(text=text))
             return
 
     if "ping_range" not in state:
         if msg in PING_OPTIONS:
             state["ping_range"] = msg
         else:
+            text, show_menu = smart_reply(msg, state, "坪數範圍", PING_OPTIONS)
             line_bot_api.reply_message(event.reply_token,
-                quick(smart_reply(msg, state, "坪數範圍", PING_OPTIONS), PING_OPTIONS))
+                quick(text, PING_OPTIONS) if show_menu else TextSendMessage(text=text))
             return
 
     if "ping" not in state:
@@ -339,24 +355,27 @@ def handle_message(event):
         if msg in sub_opts:
             state["ping"] = float(msg.replace("坪", ""))
         else:
+            text, show_menu = smart_reply(msg, state, "精確坪數", sub_opts)
             line_bot_api.reply_message(event.reply_token,
-                quick(smart_reply(msg, state, "精確坪數", sub_opts), sub_opts))
+                quick(text, sub_opts) if show_menu else TextSendMessage(text=text))
             return
 
     if "floor" not in state:
         if msg in FLOOR_OPTIONS:
             state["floor"] = msg
         else:
+            text, show_menu = smart_reply(msg, state, "施工位置", FLOOR_OPTIONS)
             line_bot_api.reply_message(event.reply_token,
-                quick(smart_reply(msg, state, "施工位置", FLOOR_OPTIONS), FLOOR_OPTIONS))
+                quick(text, FLOOR_OPTIONS) if show_menu else TextSendMessage(text=text))
             return
 
     if "area" not in state:
         if msg in AREA_OPTIONS:
             state["area"] = msg
         else:
+            text, show_menu = smart_reply(msg, state, "施工區域", AREA_OPTIONS)
             line_bot_api.reply_message(event.reply_token,
-                quick(smart_reply(msg, state, "施工區域", AREA_OPTIONS), AREA_OPTIONS))
+                quick(text, AREA_OPTIONS) if show_menu else TextSendMessage(text=text))
             return
 
     # 全部齊了，出報價
