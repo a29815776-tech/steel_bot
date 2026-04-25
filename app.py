@@ -305,16 +305,15 @@ def handle_message(event):
 
     if msg in ["重新", "重來", "再估一個", "開始", "報價"]:
         line_states[uid] = {}
-    elif line_states.get(uid, {}).get("waiting_contact"):
-        if msg != "不用":
-            customer_contacts[uid] = msg
-            notify_owner(f"📞 客戶留下聯絡方式：{msg}")
-            line_bot_api.reply_message(event.reply_token,
-                TextSendMessage(text="收到！師傅會盡快與您聯絡 😊\n如需再估一個請輸入「再估一個」"))
-        else:
-            line_bot_api.reply_message(event.reply_token,
-                TextSendMessage(text="沒問題！如需聯繫師傅可點此加 LINE：https://line.me/ti/p/~0973687898\n如需再估一個請輸入「再估一個」"))
+    elif line_states.get(uid, {}).get("waiting_name_phone"):
+        customer_contacts[uid] = msg
+        state = line_states[uid]
+        quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"], state["area"])
+        price_str = quote.split("💰")[1].split("元")[0].strip()
+        notify_owner(f"🔔 新報價通知\n客戶：{msg}\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{price_str} 元")
         line_states[uid] = {}
+        line_bot_api.reply_message(event.reply_token,
+            TextSendMessage(text=quote + "\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷\n\n如需直接聯繫師傅：https://line.me/ti/p/~0973687898\n如需再估一個請輸入「再估一個」"))
         return
 
     if uid not in line_states:
@@ -383,12 +382,10 @@ def handle_message(event):
                 quick(text, AREA_OPTIONS) if show_menu else TextSendMessage(text=text))
             return
 
-    # 全部齊了，出報價
-    quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"], state["area"])
-    notify_owner(f"🔔 新報價通知\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{quote.split('💰')[1].split('元')[0].strip()} 元")
-    line_states[uid] = {"waiting_contact": True}
+    # 全部齊了，先問稱呼電話再出報價
+    line_states[uid]["waiting_name_phone"] = True
     line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text=quote + "\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷\n\n👉 點此加師傅 LINE：https://line.me/ti/p/~0973687898\n\n或留下您的稱呼及電話 / LINE ID，師傅主動與您聯繫\n（例如：王先生 / 0912-345-678）\n不方便請輸入「不用」"))
+        TextSendMessage(text="最後一步！請留下您的稱呼及電話，馬上為您出報價 😊\n（例如：王先生 / 0912-345-678）"))
 
 
 @app.route("/img/<img_id>")
