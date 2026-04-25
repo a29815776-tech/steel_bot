@@ -8,7 +8,6 @@ from groq import Groq
 from io import BytesIO
 import uuid
 import os
-import json
 
 import pathlib
 BASE_DIR = pathlib.Path(__file__).parent
@@ -389,7 +388,7 @@ def handle_message(event):
     notify_owner(f"🔔 新報價通知\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{quote.split('💰')[1].split('元')[0].strip()} 元")
     line_states[uid] = {"waiting_contact": True}
     line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text=quote + "\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷\n\n👉 點此加師傅 LINE：https://line.me/ti/p/~0973687898\n\n或留下您的電話，師傅主動聯繫您\n（不方便請輸入「不用」）"))
+        TextSendMessage(text=quote + "\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷\n\n👉 點此加師傅 LINE：https://line.me/ti/p/~0973687898\n\n或留下您的稱呼及電話 / LINE ID，師傅主動與您聯繫\n（例如：王先生 / 0912-345-678）\n不方便請輸入「不用」"))
 
 
 @app.route("/img/<img_id>")
