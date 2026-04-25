@@ -3,7 +3,8 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (MessageEvent, TextMessage, TextSendMessage,
                              ImageMessage, VideoMessage, ImageSendMessage,
-                             QuickReply, QuickReplyButton, MessageAction)
+                             QuickReply, QuickReplyButton, MessageAction,
+                             FollowEvent)
 from groq import Groq
 from io import BytesIO
 import uuid
@@ -293,6 +294,14 @@ def notify_owner(msg):
         except Exception:
             pass
 
+@handler.add(FollowEvent)
+def handle_follow(event):
+    uid = event.source.user_id
+    line_states[uid] = {}
+    opts = ["天花板", "輕隔間"]
+    welcome = "歡迎來到百工宅修！\n請選擇您要的裝修需求：\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898"
+    line_bot_api.reply_message(event.reply_token, quick(welcome, opts))
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     uid = event.source.user_id
@@ -334,7 +343,7 @@ def handle_message(event):
             opts = ["天花板", "輕隔間"]
             text, show_menu = smart_reply(msg, state, "施工項目", opts)
             if show_menu:
-                full_text = text + "\n\n或點此加師傅 LINE 直接詢問：\nhttps://line.me/ti/p/~0973687898"
+                full_text = text + "\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898"
                 line_bot_api.reply_message(event.reply_token, quick(full_text, opts))
             else:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
