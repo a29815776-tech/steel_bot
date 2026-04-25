@@ -306,6 +306,11 @@ def handle_message(event):
     if msg in ["重新", "重來", "再估一個", "開始", "報價"]:
         line_states[uid] = {}
     elif line_states.get(uid, {}).get("waiting_name_phone"):
+        import re
+        if len(re.findall(r'[一-鿿]', msg)) < 1 or len(re.findall(r'\d', msg)) < 10:
+            line_bot_api.reply_message(event.reply_token,
+                TextSendMessage(text="請輸入您的稱呼及電話，例如：王先生 / 0912-345-678"))
+            return
         customer_contacts[uid] = msg
         state = line_states[uid]
         quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"], state["area"])
