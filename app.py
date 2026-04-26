@@ -273,6 +273,8 @@ MENU: → 回答後顯示選單（適用：問候想開始報價、與目前步�
 - 問「還有別的服務嗎」→ CHAT:目前提供天花板和輕隔間工程，如需報價請告知
 - 說「你好/哈囉」等問候 → MENU:歡迎來到百工宅修！請選擇您要的裝修需求：
 - 想重選 → MENU:沒問題，請重新選擇（或輸入「重新」從頭開始）
+- 任何簡短、模糊、測試性的訊息（如「這」「好」「請問」「嗯」「呢」「喔」單字或兩字內）→ MENU:請選擇您要的裝修需求：
+- 不確定意圖的訊息 → 優先選 MENU:，不要選 CHAT:
 
 純文字不超過60字，只回覆 CHAT: 或 MENU: 開頭。"""
     resp = groq_client.chat.completions.create(
@@ -343,7 +345,7 @@ def handle_message(event):
             opts = ["天花板", "輕隔間"]
             text, show_menu = smart_reply(msg, state, "施工項目", opts)
             if show_menu:
-                full_text = text + "\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898"
+                full_text = "請選擇您要的裝修需求：\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898"
                 line_bot_api.reply_message(event.reply_token, quick(full_text, opts))
             else:
                 line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
