@@ -4,11 +4,14 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import (MessageEvent, TextMessage, TextSendMessage,
                              ImageMessage, VideoMessage, ImageSendMessage,
                              QuickReply, QuickReplyButton, MessageAction,
-                             FollowEvent)
+                             FollowEvent, TemplateSendMessage, CarouselTemplate,
+                             CarouselColumn, MessageTemplateAction)
 from groq import Groq
 from io import BytesIO
+from urllib.parse import quote as urlquote
 import uuid
 import os
+import re
 
 import pathlib
 BASE_DIR = pathlib.Path(__file__).parent
@@ -22,8 +25,7 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# 對話記憶（生產環境應改用 Redis/DB）
-conversations = {}  # {session_id: {"history": [], "state": {...}}}
+conversations = {}
 
 EXTRACT_PROMPT = """你是一個資料擷取助理。從用戶訊息中擷取以下資訊，用 JSON 格式回覆。
 
@@ -48,101 +50,93 @@ CHAT_PROMPT = """你是「百工宅修工程行」的親切 AI 報價助理。�
 請根據狀態，用一句話回覆客人，問缺少的資訊。語氣要自然親切，不要列清單。
 如果客人問報價以外的問題，簡短回答後引導回報價。"""
 
+# === 定價 ===
+MATERIAL_PRICES = {
+    ("天花板", "明架石膏"):           1350,
+    ("天花板", "明架矽酸"):           1500,
+    ("天花板", "明架塑膠"):           1700,
+    ("天花板", "暗架矽酸"):           3000,
+    ("天花板", "暗架廚廁長條塑膠板"): 2250,
+    ("天花板", "暗架企口鋁板"):       4500,
+    ("輕隔間", "石膏板"):             3000,
+    ("輕隔間", "矽酸鈣板"):           4000,
+    ("輕隔間", "水泥板"):             4200,
+}
+FLOOR_ADDS = {"天花板": 100, "輕隔間": 150}
+
+# === 材質選項 ===
+CEILING_MATERIALS   = ["明架石膏", "明架矽酸", "明架塑膠", "暗架矽酸", "暗架廚廁長條塑膠板", "暗架企口鋁板"]
+PARTITION_MATERIALS = ["石膏板", "矽酸鈣板", "水泥板"]
+
+# === 圖片 URL ===
+_GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/"
+def _img(fn): return _GH + urlquote(fn)
+
+MATERIAL_IMAGES = {
+    "明架石膏":           _img("明架石膏天花板.jpg"),
+    "明架矽酸":           _img("明架矽酸鈣天花板.jpg"),
+    "明架塑膠":           _img("明架塑膠天花板.jpg"),
+    "暗架矽酸":           _img("暗架天花板.jpg"),
+    "暗架廚廁長條塑膠板": _img("暗架.jpg"),
+    "暗架企口鋁板":       _img("企口鋁板.jpg"),
+    "石膏板":             _img("輕隔間.jpg"),
+    "矽酸鈣板":           _img("矽酸鈣板輕隔間.jpg"),
+    "水泥板":             _img("輕隔間 (2).jpg"),
+}
+
+
 def calculate_price(service, material, ping, floor):
-    """計算報價"""
-    # 基本單價
-    base_prices = {
-        ("天花板", "石膏板"): 1350,
-        ("天花板", "矽酸鈣板"): 1500,
-        ("輕隔間", "石膏板"): 3000,
-        ("輕隔間", "矽酸鈣板"): 4000,
-    }
-    base = base_prices.get((service, material), 0)
+    base = MATERIAL_PRICES.get((service, material), 0)
     if base == 0:
         return None
-
-    # 樓層加價
-    floor_add = 100 if service == "天花板" else 150
-    floor_surcharge = floor_add * (floor - 1)
+    floor_surcharge = FLOOR_ADDS[service] * (floor - 1)
     unit_price = base + floor_surcharge
-
-    # 小坪數加價
-    if ping < 10:
-        size_rate = 1.20
-    elif ping < 20:
-        size_rate = 1.15
-    elif ping < 30:
-        size_rate = 1.10
-    else:
-        size_rate = 1.00
-
-    total = unit_price * ping * size_rate
-    return round(total)
+    if ping < 10:   size_rate = 1.20
+    elif ping < 20: size_rate = 1.15
+    elif ping < 30: size_rate = 1.10
+    else:           size_rate = 1.00
+    return round(unit_price * ping * size_rate)
 
 
 def extract_info(user_message):
-    """用 regex 擷取明確提到的資訊，沒提到的回傳 None"""
-    import re
     result = {}
-
-    # 服務項目
     if re.search(r'天花板|天花|吊頂', user_message):
         result["service"] = "天花板"
     elif re.search(r'輕隔間|隔間|隔牆|隔一間|隔房', user_message):
         result["service"] = "輕隔間"
-
-    # 材質
     if re.search(r'矽酸鈣|矽酸鈣板', user_message):
         result["material"] = "矽酸鈣板"
     elif re.search(r'石膏板|石膏', user_message):
         result["material"] = "石膏板"
-
-    # 坪數
     m = re.search(r'(\d+(?:\.\d+)?)\s*坪', user_message)
     if m:
         result["ping"] = float(m.group(1))
-
-    # 樓層
     m = re.search(r'(\d+)\s*樓', user_message)
     if m:
         result["floor"] = int(m.group(1))
-
     return result
 
 def format_quote(service, material, ping, floor):
     price = calculate_price(service, material, ping, floor)
-    base_prices = {"天花板": {"石膏板": 1350, "矽酸鈣板": 1500},
-                   "輕隔間": {"石膏板": 3000, "矽酸鈣板": 4000}}
-    floor_adds = {"天花板": 100, "輕隔間": 150}
-    base = base_prices[service][material]
-    floor_add = floor_adds[service] * (floor - 1)
+    base = MATERIAL_PRICES.get((service, material), 0)
+    floor_add = FLOOR_ADDS[service] * (floor - 1)
     size_pct = 20 if ping < 10 else (15 if ping < 20 else (10 if ping < 30 else 0))
-
     lines = [
-        "📋 報價明細",
-        "─────────────",
-        f"項目：{service}",
-        f"材質：{material}",
-        f"坪數：{ping}坪",
-        f"樓層：{floor}樓",
-        "",
+        "📋 報價明細", "─────────────",
+        f"項目：{service}", f"材質：{material}",
+        f"坪數：{ping}坪", f"樓層：{floor}樓", "",
         f"基本單價：{base}元/坪",
     ]
     if floor_add > 0:
-        lines.append(f"樓層加價：+{floor_adds[service]}元/坪 × {floor-1} = +{floor_add}元/坪")
+        lines.append(f"樓層加價：+{FLOOR_ADDS[service]}元/坪 × {floor-1} = +{floor_add}元/坪")
     if size_pct > 0:
-        lines.append(f"小坪數加價：+{size_pct}%（{ping}坪未滿{'10' if ping<10 else '20' if ping<20 else '30'}坪）")
-    lines += [
-        "",
-        f"💰 預估總價：{price:,} 元",
-        "─────────────",
-        "以上為預估價，實際費用依現場丈量為準。",
-        "如需正式報價，請來電或傳訊息：0973-687-898",
-    ]
+        lines.append(f"小坪數加價：+{size_pct}%")
+    lines += ["", f"💰 預估總價：{price:,} 元", "─────────────",
+              "以上為預估價，實際費用依現場丈量為準。",
+              "如需正式報價，請來電或傳訊息：0973-687-898"]
     return "\n".join(lines)
 
 def ai_reply(session_id, user_message, state_desc):
-    """生成自然語言回覆"""
     sess = conversations[session_id]
     sess["history"].append({"role": "user", "content": user_message})
     history = sess["history"][-10:]
@@ -150,8 +144,7 @@ def ai_reply(session_id, user_message, state_desc):
     resp = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "system", "content": prompt}] + history,
-        temperature=0.6,
-        max_tokens=200,
+        temperature=0.6, max_tokens=200,
     )
     reply = resp.choices[0].message.content.strip()
     sess["history"].append({"role": "assistant", "content": reply})
@@ -163,36 +156,23 @@ def chat(session_id, user_message):
             "history": [],
             "state": {"service": None, "material": None, "ping": None, "floor": None}
         }
-
     state = conversations[session_id]["state"]
-
-    # 擷取本次訊息中的資訊，只更新 null 的欄位
     extracted = extract_info(user_message)
     for key in ["service", "material", "ping", "floor"]:
         if state[key] is None and extracted.get(key) is not None:
             state[key] = extracted[key]
-
-    # 判斷缺少什麼
-    missing = [k for k in ["service", "material", "ping", "floor"] if state[key] is None for k in [k]]
     missing = [k for k in ["service", "material", "ping", "floor"] if state[k] is None]
-
     if not missing:
-        # 資訊齊全，直接算價（不經 AI）
         quote = format_quote(state["service"], state["material"], int(state["ping"]), int(state["floor"]))
         conversations[session_id]["history"].append({"role": "user", "content": user_message})
         conversations[session_id]["history"].append({"role": "assistant", "content": quote})
-        # 重置 state 讓下次可以問新項目
         conversations[session_id]["state"] = {"service": None, "material": None, "ping": None, "floor": None}
         return quote
-
-    # 還有缺少的資訊，讓 AI 問問題
-    labels = {"service": "施工項目（天花板或輕隔間）", "material": "材質（石膏板或矽酸鈣板）",
-              "ping": "坪數", "floor": "樓層"}
+    labels = {"service": "施工項目", "material": "材質", "ping": "坪數", "floor": "樓層"}
     known = {k: v for k, v in state.items() if v is not None}
     known_desc = "、".join(f"{labels[k]}={v}" for k, v in known.items()) if known else "尚無"
     missing_desc = "、".join(labels[k] for k in missing)
     state_desc = f"已知：{known_desc}。還需要：{missing_desc}"
-
     return ai_reply(session_id, user_message, state_desc)
 
 
@@ -207,7 +187,7 @@ def callback():
     return "OK"
 
 
-PING_OPTIONS  = ["30坪以上", "30坪內", "20坪內", "10坪內"]
+PING_OPTIONS = ["30坪以上", "30坪內", "20坪內", "10坪內"]
 PING_SUB_OPTIONS = {
     "30坪以上": ["30坪","35坪","40坪","45坪","50坪","55坪","60坪","70坪","80坪","90坪"],
     "30坪內":   ["20坪","21坪","22坪","23坪","24坪","25坪","26坪","27坪","28坪","29坪"],
@@ -216,15 +196,14 @@ PING_SUB_OPTIONS = {
 }
 FLOOR_OPTIONS = ["一樓施工", "2樓或電梯", "3樓", "4樓", "5樓", "頂加"]
 FLOOR_DATA = {"一樓施工":1,"2樓或電梯":2,"3樓":3,"4樓":4,"5樓":5,"頂加":6}
-AREA_OPTIONS = ["台北市", "新北市", "基隆", "宜蘭"]
+AREA_OPTIONS = ["台北市", "新北市", "基隆", "宜蘭", "桃園"]
 
 OWNER_LINE_ID = os.environ.get("OWNER_LINE_ID", "")
 BASE_URL = os.environ.get("BASE_URL", "https://steel-bot.onrender.com")
 
-image_store = {}  # {img_id: bytes}
-
-line_states = {}    # {user_id: {service, material, ping_range, ping, floor, area}}
-customer_contacts = {}  # {user_id: contact_string}
+image_store = {}
+line_states = {}
+customer_contacts = {}
 
 def quick(text, options):
     return TextSendMessage(
@@ -234,29 +213,37 @@ def quick(text, options):
         ])
     )
 
+def material_carousel(service):
+    items = CEILING_MATERIALS if service == "天花板" else PARTITION_MATERIALS
+    columns = [
+        CarouselColumn(
+            thumbnail_image_url=MATERIAL_IMAGES[mat],
+            title=mat,
+            text="點選下方按鈕選擇",
+            actions=[MessageTemplateAction(label="選擇此材質", text=mat)]
+        )
+        for mat in items
+    ]
+    return TemplateSendMessage(alt_text="請選擇材質", template=CarouselTemplate(columns=columns))
+
 def line_format_quote(service, material, ping, floor_label, area):
     floor = FLOOR_DATA[floor_label]
+    base = MATERIAL_PRICES.get((service, material), 0)
+    floor_add = FLOOR_ADDS[service] * (floor - 1)
     if ping < 10:   rate = 1.20
     elif ping < 20: rate = 1.15
     elif ping < 30: rate = 1.10
     else:           rate = 1.00
-    base_prices = {"天花板":{"石膏板":1350,"矽酸鈣板":1500},"輕隔間":{"石膏板":3000,"矽酸鈣板":4000}}
-    floor_adds  = {"天花板":100,"輕隔間":150}
-    base = base_prices[service][material]
-    floor_add = floor_adds[service] * (floor - 1)
     total = round((base + floor_add) * ping * rate)
     lines = ["📋 報價結果", "─────────────",
              f"項目：{service}", f"材質：{material}",
              f"坪數：{int(ping)}坪", f"位置：{floor_label}",
-             f"區域：{area}",
-             "─────────────",
-             f"💰 預估總價：{total:,} 元",
-             "─────────────",
+             f"區域：{area}", "─────────────",
+             f"💰 預估總價：{total:,} 元", "─────────────",
              "以上為預估價，實際費用依現場丈量為準。"]
     return "\n".join(lines)
 
 def smart_reply(user_message, state, next_prompt, options):
-    """AI 判斷是否需要顯示選單，回傳 (text, show_menu)"""
     labels = {"service":"施工項目","material":"材質","ping_range":"坪數範圍","ping":"坪數","floor":"樓層","area":"區域"}
     known = "、".join(f"{labels[k]}={v}" for k,v in state.items() if v is not None and k in labels)
     has_state = bool(known)
@@ -265,8 +252,8 @@ def smart_reply(user_message, state, next_prompt, options):
 {context}
 
 判斷客人訊息，用以下格式回覆：
-CHAT: → 直接回答，不顯示選單（適用：問你是誰、問服務範圍、問價格概念、閒聊等）
-MENU: → 回答後顯示選單（適用：問候想開始報價、與目前步驟相關、需要繼續流程）
+CHAT: → 直接回答，不顯示選單
+MENU: → 回答後顯示選單
 
 規則：
 - 問「你是誰」→ CHAT:介紹自己是百工宅修報價助理
@@ -314,22 +301,48 @@ def handle_message(event):
             TextSendMessage(text=f"您的 ID：{uid}"))
         return
 
-    if msg in ["重新", "重來", "再估一個", "開始", "報價"]:
+    if msg in ["重新", "重來", "再估一個", "繼續估價請按這裡", "開始", "報價"]:
         line_states[uid] = {}
-    elif line_states.get(uid, {}).get("waiting_name_phone"):
-        import re
-        if len(re.findall(r'[一-鿿]', msg)) < 1 or len(re.findall(r'\d', msg)) < 10:
+    elif line_states.get(uid, {}).get("waiting_contact_choice"):
+        if msg in ["留電話", "留LINE ID"]:
+            line_states[uid]["contact_type"] = msg
+            line_states[uid]["waiting_contact_choice"] = False
+            line_states[uid]["waiting_name_phone"] = True
+            if msg == "留電話":
+                reply_text = "請留下您的稱呼及電話 😊\n（例如：王先生 / 0912-345-678）"
+            else:
+                reply_text = "請留下您的稱呼及LINE ID 😊\n（例如：王先生 / @wangwang）"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
+        else:
             line_bot_api.reply_message(event.reply_token,
-                TextSendMessage(text="請輸入您的稱呼及電話，例如：王先生 / 0912-345-678"))
-            return
+                quick("請選擇聯絡方式：", ["留電話", "留LINE ID"]))
+        return
+    elif line_states.get(uid, {}).get("waiting_name_phone"):
+        contact_type = line_states[uid].get("contact_type", "留電話")
+        if contact_type == "留電話":
+            if len(re.findall(r'[一-鿿]', msg)) < 1 or len(re.findall(r'\d', msg)) < 10:
+                line_bot_api.reply_message(event.reply_token,
+                    TextSendMessage(text="請輸入您的稱呼及電話，例如：王先生 / 0912-345-678"))
+                return
+        else:
+            if len(re.findall(r'[一-鿿]', msg)) < 1 or len(msg) < 5:
+                line_bot_api.reply_message(event.reply_token,
+                    TextSendMessage(text="請輸入您的稱呼及LINE ID，例如：王先生 / @wangwang"))
+                return
         customer_contacts[uid] = msg
         state = line_states[uid]
         quote = line_format_quote(state["service"], state["material"], state["ping"], state["floor"], state["area"])
         price_str = quote.split("💰")[1].split("元")[0].strip()
-        notify_owner(f"🔔 新報價通知\n客戶：{msg}\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{price_str} 元")
+        contact_label = "電話" if contact_type == "留電話" else "LINE ID"
+        notify_owner(f"🔔 新報價通知\n客戶：{msg}（{contact_label}）\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{price_str} 元")
         line_states[uid] = {}
         line_bot_api.reply_message(event.reply_token,
-            TextSendMessage(text=quote + "\n\n也可以上傳現場照片或平面圖，讓師傅更了解施工狀況 📷\n\n如需直接聯繫師傅：https://line.me/ti/p/~0973687898\n如需再估一個請輸入「再估一個」"))
+            TextSendMessage(
+                text=quote + "\n\n請上傳照片或手繪平面草圖可為您免費設計與建議喔\n\n如需場勘請留詳細地址電話",
+                quick_reply=QuickReply(items=[
+                    QuickReplyButton(action=MessageAction(label="繼續估價請按這裡", text="繼續估價請按這裡"))
+                ])
+            ))
         return
 
     if uid not in line_states:
@@ -337,10 +350,14 @@ def handle_message(event):
 
     state = line_states[uid]
 
-    # 依序填入資訊
     if "service" not in state:
         if msg in ["天花板", "輕隔間"]:
             state["service"] = msg
+            line_bot_api.reply_message(event.reply_token, [
+                TextSendMessage(text="請選擇材質："),
+                material_carousel(msg)
+            ])
+            return
         else:
             opts = ["天花板", "輕隔間"]
             text, show_menu = smart_reply(msg, state, "施工項目", opts)
@@ -352,13 +369,21 @@ def handle_message(event):
             return
 
     if "material" not in state:
-        if msg in ["石膏板", "矽酸鈣板"]:
+        mat_opts = CEILING_MATERIALS if state["service"] == "天花板" else PARTITION_MATERIALS
+        if msg in mat_opts:
             state["material"] = msg
-        else:
-            opts = ["石膏板", "矽酸鈣板"]
-            text, show_menu = smart_reply(msg, state, "材質", opts)
             line_bot_api.reply_message(event.reply_token,
-                quick(text, opts) if show_menu else TextSendMessage(text=text))
+                quick("請選擇坪數範圍：", PING_OPTIONS))
+            return
+        else:
+            text, show_menu = smart_reply(msg, state, "材質", mat_opts)
+            if show_menu:
+                line_bot_api.reply_message(event.reply_token, [
+                    TextSendMessage(text=text) if text else TextSendMessage(text="請選擇材質："),
+                    material_carousel(state["service"])
+                ])
+            else:
+                line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
             return
 
     if "ping_range" not in state:
@@ -398,10 +423,9 @@ def handle_message(event):
                 quick(text, AREA_OPTIONS) if show_menu else TextSendMessage(text=text))
             return
 
-    # 全部齊了，先問稱呼電話再出報價
-    line_states[uid]["waiting_name_phone"] = True
+    line_states[uid]["waiting_contact_choice"] = True
     line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text="最後一步！請留下您的稱呼及電話，馬上為您出報價 😊\n（例如：王先生 / 0912-345-678）"))
+        quick("最後一步！請選擇聯絡方式，馬上為您出報價 😊", ["留電話", "留LINE ID"]))
 
 
 @app.route("/img/<img_id>")
