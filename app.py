@@ -338,7 +338,7 @@ def handle_message(event):
         price_str = quote.split("💰")[1].split("元")[0].strip()
         contact_label = "電話" if contact_type == "留電話" else "LINE ID"
         notify_owner(f"🔔 新報價通知\n客戶：{msg}（{contact_label}）\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{price_str} 元")
-        line_states[uid] = {}
+        line_states[uid] = {"post_quote": True}
         line_bot_api.reply_message(event.reply_token,
             TextSendMessage(
                 text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n專人儘快為你服務 😊\n\n請上傳照片或手繪平面草圖可為您免費設計與建議喔\n\n如需場勘請留詳細地址電話\n\n如需直接聯繫師傅：https://line.me/ti/p/~0973687898",
@@ -352,6 +352,12 @@ def handle_message(event):
         line_states[uid] = {}
 
     state = line_states[uid]
+
+    # 報價完成後客戶繼續發言 → 引導至個人 LINE
+    if state.get("post_quote"):
+        line_bot_api.reply_message(event.reply_token,
+            TextSendMessage(text="如有其他問題歡迎直接聯繫師傅，會更快幫您解答 😊\nhttps://line.me/ti/p/~0973687898"))
+        return
 
     # 沒有進行中的流程，顯示歡迎詞（排除流程中的有效選項）
     flow_options = ["天花板", "輕隔間"] + CEILING_MATERIALS + PARTITION_MATERIALS + PING_OPTIONS + FLOOR_OPTIONS + AREA_OPTIONS
