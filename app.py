@@ -353,8 +353,11 @@ def handle_message(event):
 
     state = line_states[uid]
 
-    # 沒有進行中的流程，顯示歡迎詞
-    if not state:
+    # 沒有進行中的流程，顯示歡迎詞（排除流程中的有效選項）
+    flow_options = ["天花板", "輕隔間"] + CEILING_MATERIALS + PARTITION_MATERIALS + PING_OPTIONS + FLOOR_OPTIONS + AREA_OPTIONS
+    for sub in PING_SUB_OPTIONS.values():
+        flow_options += sub
+    if not state and msg not in flow_options:
         line_bot_api.reply_message(event.reply_token,
             quick("歡迎來到百工宅修！👋\n專業天花板・輕隔間工程\n\n點下方按鈕開始估價：", ["我要估價"]))
         return
