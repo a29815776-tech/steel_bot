@@ -454,7 +454,7 @@ def handle_media(event):
     else:
         notify_owner("🎥 客戶上傳了影片")
     line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text="感謝您上傳照片！老闆收到後會盡快與您聯絡。\n如需來電詢問：0973-687-898"))
+        TextSendMessage(text="感謝你上傳照片如需預約現場丈量請留詳細地址電話。\n更多問題請直接來電：0973-687-898"))
 
 
 @app.route("/")
