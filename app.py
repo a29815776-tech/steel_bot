@@ -301,8 +301,11 @@ def handle_message(event):
             TextSendMessage(text=f"您的 ID：{uid}"))
         return
 
-    if msg in ["重新", "重來", "再估一個", "繼續估價請按這裡", "開始", "報價"]:
+    if msg in ["重新", "重來", "再估一個", "繼續估價請按這裡", "開始", "報價", "我要估價"]:
         line_states[uid] = {}
+        opts = ["天花板", "輕隔間"]
+        line_bot_api.reply_message(event.reply_token, quick("請選擇您要的裝修需求：\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898", opts))
+        return
     elif line_states.get(uid, {}).get("waiting_contact_choice"):
         if msg in ["留電話", "留LINE ID"]:
             line_states[uid]["contact_type"] = msg
@@ -349,6 +352,12 @@ def handle_message(event):
         line_states[uid] = {}
 
     state = line_states[uid]
+
+    # 沒有進行中的流程，顯示歡迎詞
+    if not state:
+        line_bot_api.reply_message(event.reply_token,
+            quick("歡迎來到百工宅修！👋\n專業天花板・輕隔間工程\n\n點下方按鈕開始估價：", ["我要估價"]))
+        return
 
     if "service" not in state:
         if msg in ["天花板", "輕隔間"]:
