@@ -341,7 +341,7 @@ def handle_message(event):
         line_states[uid] = {"post_quote": True}
         line_bot_api.reply_message(event.reply_token,
             TextSendMessage(
-                text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n專人儘快為你服務 😊\n\n請上傳照片或手繪平面草圖可為您免費設計與建議喔\n\n如需場勘請留詳細地址電話\n\n如需直接聯繫師傅：https://line.me/ti/p/~0973687898",
+                text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n專人儘快為你服務 😊\n\n請上傳照片或手繪平面草圖可為您免費設計與建議喔\n\n如需場勘請留詳細地址電話\n\n更多施工現場照片案例請點這裡\nhttps://sites.google.com/view/0973687898/home",
                 quick_reply=QuickReply(items=[
                     QuickReplyButton(action=MessageAction(label="繼續估價請按這裡", text="繼續估價請按這裡"))
                 ])
