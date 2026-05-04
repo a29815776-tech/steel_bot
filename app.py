@@ -464,15 +464,23 @@ def handle_media(event):
         if OWNER_LINE_ID:
             try:
                 contact = customer_contacts.get(uid)
-                note = f"\n聯絡方式：{contact}" if contact else ""
-                line_bot_api.push_message(OWNER_LINE_ID, TextSendMessage(text=f"📷 客戶上傳了照片{note}"))
+                if contact:
+                    owner_msg = f"📷 客戶上傳了照片\n\n👤 客戶姓名電話：\n{contact}"
+                else:
+                    owner_msg = "📷 客戶上傳了照片\n\n（客戶尚未留下聯絡資料）"
+                line_bot_api.push_message(OWNER_LINE_ID, TextSendMessage(text=owner_msg))
                 line_bot_api.push_message(OWNER_LINE_ID, ImageSendMessage(original_content_url=img_url, preview_image_url=img_url))
             except Exception:
                 pass
+        contact = customer_contacts.get(uid)
+        if contact:
+            reply_text = "感謝你上傳照片！如需預約現場丈量請留詳細地址，師傅會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898"
+        else:
+            reply_text = "感謝你上傳照片！\n\n請留下您的姓名及電話，方便師傅與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）\n\n更多問題請直接來電：0973-687-898"
     else:
         notify_owner("🎥 客戶上傳了影片")
-    line_bot_api.reply_message(event.reply_token,
-        TextSendMessage(text="感謝你上傳照片如需預約現場丈量請留詳細地址電話。\n更多問題請直接來電：0973-687-898"))
+        reply_text = "感謝你上傳影片如需預約現場丈量請留詳細地址電話。\n更多問題請直接來電：0973-687-898"
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
 
 @app.route("/")
