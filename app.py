@@ -196,7 +196,7 @@ PING_SUB_OPTIONS = {
 }
 FLOOR_OPTIONS = ["一樓施工", "2樓或電梯", "3樓", "4樓", "5樓", "頂加"]
 FLOOR_DATA = {"一樓施工":1,"2樓或電梯":2,"3樓":3,"4樓":4,"5樓":5,"頂加":6}
-AREA_OPTIONS = ["台北市", "新北市", "基隆", "宜蘭", "桃園"]
+AREA_OPTIONS = ["台北市", "新北市", "桃園", "基隆", "宜蘭"]
 
 OWNER_LINE_ID = os.environ.get("OWNER_LINE_ID", "")
 BASE_URL = os.environ.get("BASE_URL", "https://steel-bot.onrender.com")
