@@ -197,6 +197,7 @@ PING_SUB_OPTIONS = {
 FLOOR_OPTIONS = ["一樓施工", "2樓或電梯", "3樓", "4樓", "5樓", "頂加"]
 FLOOR_DATA = {"一樓施工":1,"2樓或電梯":2,"3樓":3,"4樓":4,"5樓":5,"頂加":6}
 AREA_OPTIONS = ["台北市", "新北市", "桃園", "基隆", "宜蘭"]
+STEP_ORDER = ["service", "material", "ping_range", "ping", "floor", "area"]
 
 OWNER_LINE_ID = os.environ.get("OWNER_LINE_ID", "")
 BASE_URL = os.environ.get("BASE_URL", "https://steel-bot.onrender.com")
@@ -283,6 +284,66 @@ def notify_owner(msg):
         except Exception:
             pass
 
+def _handle_back(uid, event):
+    state = line_states.get(uid, {})
+
+    if state.get("post_quote"):
+        line_bot_api.reply_message(event.reply_token,
+            quick("如需重新估價請點下方按鈕 😊", ["繼續估價請按這裡"]))
+        return
+
+    if state.get("waiting_name_phone"):
+        state.pop("waiting_name_phone", None)
+        state.pop("contact_type", None)
+        state["waiting_contact_choice"] = True
+        line_states[uid] = state
+        line_bot_api.reply_message(event.reply_token,
+            quick("請選擇聯絡方式：", ["留電話", "留LINE ID", "上一步 ↩"]))
+        return
+
+    if state.get("waiting_contact_choice"):
+        state.pop("waiting_contact_choice", None)
+        state.pop("area", None)
+        line_states[uid] = state
+        line_bot_api.reply_message(event.reply_token,
+            quick("請重新選擇施工區域：", AREA_OPTIONS + ["上一步 ↩"]))
+        return
+
+    current_step = next((s for s in STEP_ORDER if s not in state), None)
+    if not current_step or current_step == "service":
+        line_bot_api.reply_message(event.reply_token,
+            quick("請選擇施工項目：", ["天花板", "輕隔間"]))
+        return
+
+    prev_step = STEP_ORDER[STEP_ORDER.index(current_step) - 1]
+    state.pop(prev_step, None)
+    line_states[uid] = state
+
+    if prev_step == "service":
+        line_bot_api.reply_message(event.reply_token,
+            quick("請重新選擇施工項目：", ["天花板", "輕隔間"]))
+    elif prev_step == "material":
+        line_bot_api.reply_message(event.reply_token, [
+            TextSendMessage(text="請重新選擇材質：",
+                quick_reply=QuickReply(items=[
+                    QuickReplyButton(action=MessageAction(label="上一步 ↩", text="上一步 ↩"))
+                ])),
+            material_carousel(state["service"])
+        ])
+    elif prev_step == "ping_range":
+        line_bot_api.reply_message(event.reply_token,
+            quick("請重新選擇坪數範圍：", PING_OPTIONS + ["上一步 ↩"]))
+    elif prev_step == "ping":
+        sub_opts = PING_SUB_OPTIONS[state["ping_range"]]
+        line_bot_api.reply_message(event.reply_token,
+            quick("請重新選擇坪數：", sub_opts + ["上一步 ↩"]))
+    elif prev_step == "floor":
+        line_bot_api.reply_message(event.reply_token,
+            quick("請重新選擇施工位置：", FLOOR_OPTIONS + ["上一步 ↩"]))
+    elif prev_step == "area":
+        line_bot_api.reply_message(event.reply_token,
+            quick("請重新選擇施工區域：", AREA_OPTIONS + ["上一步 ↩"]))
+
 @handler.add(FollowEvent)
 def handle_follow(event):
     uid = event.source.user_id
@@ -306,6 +367,9 @@ def handle_message(event):
         opts = ["天花板", "輕隔間"]
         line_bot_api.reply_message(event.reply_token, quick("請選擇您要的裝修需求：\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898", opts))
         return
+    elif msg == "上一步 ↩":
+        _handle_back(uid, event)
+        return
     elif line_states.get(uid, {}).get("waiting_contact_choice"):
         if msg in ["留電話", "留LINE ID"]:
             line_states[uid]["contact_type"] = msg
@@ -318,7 +382,7 @@ def handle_message(event):
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
         else:
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇聯絡方式：", ["留電話", "留LINE ID"]))
+                quick("請選擇聯絡方式：", ["留電話", "留LINE ID", "上一步 ↩"]))
         return
     elif line_states.get(uid, {}).get("waiting_name_phone"):
         contact_type = line_states[uid].get("contact_type", "留電話")
@@ -360,7 +424,7 @@ def handle_message(event):
         return
 
     # 沒有進行中的流程，顯示歡迎詞（排除流程中的有效選項）
-    flow_options = ["天花板", "輕隔間"] + CEILING_MATERIALS + PARTITION_MATERIALS + PING_OPTIONS + FLOOR_OPTIONS + AREA_OPTIONS
+    flow_options = ["天花板", "輕隔間", "上一步 ↩"] + CEILING_MATERIALS + PARTITION_MATERIALS + PING_OPTIONS + FLOOR_OPTIONS + AREA_OPTIONS
     for sub in PING_SUB_OPTIONS.values():
         flow_options += sub
     if not state and msg not in flow_options:
@@ -372,7 +436,10 @@ def handle_message(event):
         if msg in ["天花板", "輕隔間"]:
             state["service"] = msg
             line_bot_api.reply_message(event.reply_token, [
-                TextSendMessage(text="請選擇材質："),
+                TextSendMessage(text="請選擇材質：",
+                    quick_reply=QuickReply(items=[
+                        QuickReplyButton(action=MessageAction(label="上一步 ↩", text="上一步 ↩"))
+                    ])),
                 material_carousel(msg)
             ])
             return
@@ -391,13 +458,18 @@ def handle_message(event):
         if msg in mat_opts:
             state["material"] = msg
             line_bot_api.reply_message(event.reply_token,
-                quick("請選擇坪數範圍：", PING_OPTIONS))
+                quick("請選擇坪數範圍：", PING_OPTIONS + ["上一步 ↩"]))
             return
         else:
             text, show_menu = smart_reply(msg, state, "材質", mat_opts)
             if show_menu:
                 line_bot_api.reply_message(event.reply_token, [
-                    TextSendMessage(text=text) if text else TextSendMessage(text="請選擇材質："),
+                    TextSendMessage(
+                        text=text if text else "請選擇材質：",
+                        quick_reply=QuickReply(items=[
+                            QuickReplyButton(action=MessageAction(label="上一步 ↩", text="上一步 ↩"))
+                        ])
+                    ),
                     material_carousel(state["service"])
                 ])
             else:
@@ -410,7 +482,7 @@ def handle_message(event):
         else:
             text, show_menu = smart_reply(msg, state, "坪數範圍", PING_OPTIONS)
             line_bot_api.reply_message(event.reply_token,
-                quick(text, PING_OPTIONS) if show_menu else TextSendMessage(text=text))
+                quick(text, PING_OPTIONS + ["上一步 ↩"]) if show_menu else TextSendMessage(text=text))
             return
 
     if "ping" not in state:
@@ -420,7 +492,7 @@ def handle_message(event):
         else:
             text, show_menu = smart_reply(msg, state, "精確坪數", sub_opts)
             line_bot_api.reply_message(event.reply_token,
-                quick(text, sub_opts) if show_menu else TextSendMessage(text=text))
+                quick(text, sub_opts + ["上一步 ↩"]) if show_menu else TextSendMessage(text=text))
             return
 
     if "floor" not in state:
@@ -429,7 +501,7 @@ def handle_message(event):
         else:
             text, show_menu = smart_reply(msg, state, "施工位置", FLOOR_OPTIONS)
             line_bot_api.reply_message(event.reply_token,
-                quick(text, FLOOR_OPTIONS) if show_menu else TextSendMessage(text=text))
+                quick(text, FLOOR_OPTIONS + ["上一步 ↩"]) if show_menu else TextSendMessage(text=text))
             return
 
     if "area" not in state:
@@ -438,12 +510,12 @@ def handle_message(event):
         else:
             text, show_menu = smart_reply(msg, state, "施工區域", AREA_OPTIONS)
             line_bot_api.reply_message(event.reply_token,
-                quick(text, AREA_OPTIONS) if show_menu else TextSendMessage(text=text))
+                quick(text, AREA_OPTIONS + ["上一步 ↩"]) if show_menu else TextSendMessage(text=text))
             return
 
     line_states[uid]["waiting_contact_choice"] = True
     line_bot_api.reply_message(event.reply_token,
-        quick("最後一步！請選擇聯絡方式，馬上為您出報價 😊", ["留電話", "留LINE ID"]))
+        quick("最後一步！請選擇聯絡方式，馬上為您出報價 😊", ["留電話", "留LINE ID", "上一步 ↩"]))
 
 
 @app.route("/img/<img_id>")
