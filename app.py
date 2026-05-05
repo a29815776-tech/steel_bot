@@ -261,6 +261,7 @@ MENU: → 回答後顯示選單
 - 問「還有別的服務嗎」→ CHAT:目前提供天花板和輕隔間工程，如需報價請告知
 - 說「你好/哈囉」等問候 → MENU:歡迎來到百工宅修！請選擇您要的裝修需求：
 - 想重選 → MENU:沒問題，請重新選擇（或輸入「重新」從頭開始）
+- 問材質差異、哪個好、價格差多少、比較等問題 → CHAT:詳細差異建議直接詢問師傅喔！
 - 任何簡短、模糊、測試性的訊息（如「這」「好」「請問」「嗯」「呢」「喔」單字或兩字內）→ MENU:請選擇您要的裝修需求：
 - 不確定意圖的訊息 → 優先選 MENU:，不要選 CHAT:
 
@@ -272,7 +273,9 @@ MENU: → 回答後顯示選單
     )
     raw = resp.choices[0].message.content.strip()
     if raw.startswith("CHAT:"):
-        return raw[5:].strip(), False
+        text = raw[5:].strip()
+        text += "\n\n如需詳細諮詢請直接聯繫師傅 😊\nhttps://line.me/ti/p/~0973687898"
+        return text, False
     elif raw.startswith("MENU:"):
         return raw[5:].strip(), True
     return raw, True
