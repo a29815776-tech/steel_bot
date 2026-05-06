@@ -273,8 +273,7 @@ MENU: → 回答後顯示選單
     )
     raw = resp.choices[0].message.content.strip()
     if raw.startswith("CHAT:"):
-        text = raw[5:].strip()
-        text += "\n\n如需詳細諮詢請直接聯繫師傅 😊\nhttps://line.me/ti/p/~0973687898"
+        text = "這個問題我無法回答，請直接聯繫師傅 😊\nhttps://line.me/ti/p/~0973687898"
         return text, False
     elif raw.startswith("MENU:"):
         return raw[5:].strip(), True
