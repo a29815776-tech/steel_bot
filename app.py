@@ -422,7 +422,7 @@ def handle_message(event):
     # 報價完成後客戶繼續發言 → 引導至個人 LINE
     if state.get("post_quote"):
         line_bot_api.reply_message(event.reply_token,
-            TextSendMessage(text="如有其他問題歡迎直接聯繫師傅，會更快幫您解答 😊\nhttps://line.me/ti/p/~0973687898"))
+            TextSendMessage(text="更多諮詢請點連結由專人為您服務\nhttps://line.me/ti/p/~0973687898"))
         return
 
     # 沒有進行中的流程，顯示歡迎詞（排除流程中的有效選項）
