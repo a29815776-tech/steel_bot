@@ -261,7 +261,7 @@ MENU: → 回答後顯示選單
 - 問「還有別的服務嗎」→ CHAT:目前提供天花板和輕隔間工程，如需報價請告知
 - 說「你好/哈囉」等問候 → MENU:歡迎來到百工宅修！請選擇您要的裝修需求：
 - 想重選 → MENU:沒問題，請重新選擇（或輸入「重新」從頭開始）
-- 問材質差異、哪個好、價格差多少、比較等問題 → CHAT:詳細差異建議直接詢問師傅喔！
+- 問材質差異、哪個好、價格差多少、比較等問題 → CHAT:詳細差異建議直接詢問專人服務喔！
 - 任何簡短、模糊、測試性的訊息（如「這」「好」「請問」「嗯」「呢」「喔」單字或兩字內）→ MENU:請選擇您要的裝修需求：
 - 不確定意圖的訊息 → 優先選 MENU:，不要選 CHAT:
 
@@ -273,7 +273,7 @@ MENU: → 回答後顯示選單
     )
     raw = resp.choices[0].message.content.strip()
     if raw.startswith("CHAT:"):
-        text = "這個問題我無法回答，請直接聯繫師傅 😊\nhttps://line.me/ti/p/~0973687898"
+        text = "這個問題我無法回答，請直接聯繫專人服務 😊\nhttps://line.me/ti/p/~0973687898"
         return text, False
     elif raw.startswith("MENU:"):
         return raw[5:].strip(), True
@@ -405,13 +405,19 @@ def handle_message(event):
         contact_label = "電話" if contact_type == "留電話" else "LINE ID"
         notify_owner(f"🔔 新報價通知\n客戶：{msg}（{contact_label}）\n項目：{state['service']}／{state['material']}\n坪數：{int(state['ping'])}坪／{state['floor']}\n區域：{state['area']}\n預估：{price_str} 元")
         line_states[uid] = {"post_quote": True}
-        line_bot_api.reply_message(event.reply_token,
+        sample_img = _img("暗架天花板.jpg")
+        line_bot_api.reply_message(event.reply_token, [
             TextSendMessage(
-                text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n專人儘快為你服務 😊\n\n只要上傳現場照片即可獲更多優惠價格\n\n如需場勘請留詳細地址電話\n\n更多施工現場照片案例請點這裡\nhttps://sites.google.com/view/0973687898/home",
+                text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n專人儘快為你服務 😊\n\n只要上傳現場照片即可獲更多優惠價格\n\n如需場勘請留詳細地址電話"
+            ),
+            ImageSendMessage(original_content_url=sample_img, preview_image_url=sample_img),
+            TextSendMessage(
+                text="更多施工現場照片案例請點這裡\nhttps://sites.google.com/view/0973687898/home",
                 quick_reply=QuickReply(items=[
                     QuickReplyButton(action=MessageAction(label="繼續估價請按這裡", text="繼續估價請按這裡"))
                 ])
-            ))
+            )
+        ])
         return
 
     if uid not in line_states:
@@ -548,9 +554,9 @@ def handle_media(event):
                 pass
         contact = customer_contacts.get(uid)
         if contact:
-            reply_text = "感謝你上傳照片！如需預約現場丈量請留詳細地址，師傅會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898"
+            reply_text = "感謝你上傳照片！如需預約現場丈量請留詳細地址，專人服務會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898"
         else:
-            reply_text = "感謝你上傳照片！\n\n請留下您的姓名及電話，方便師傅與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）\n\n更多問題請直接來電：0973-687-898"
+            reply_text = "感謝你上傳照片！\n\n請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）\n\n更多問題請直接來電：0973-687-898"
     else:
         notify_owner("🎥 客戶上傳了影片")
         reply_text = "感謝你上傳影片如需預約現場丈量請留詳細地址電話。\n更多問題請直接來電：0973-687-898"
