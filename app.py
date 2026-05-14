@@ -425,8 +425,14 @@ def handle_message(event):
                 text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n只要上傳現場照片即可獲更多優惠價格"
             ),
             ImageSendMessage(original_content_url=sample_img, preview_image_url=sample_img),
-            TextSendMessage(
-                text="更多施工現場照片案例請點這裡\nhttps://sites.google.com/view/0973687898/home",
+            TemplateSendMessage(
+                alt_text="更多施工現場照片案例",
+                template=ButtonsTemplate(
+                    text="點下方按鈕查看更多施工案例照片 📸",
+                    actions=[
+                        URITemplateAction(label="案例照片", uri="https://sites.google.com/view/0973687898/home")
+                    ]
+                ),
                 quick_reply=QuickReply(items=[
                     QuickReplyButton(action=MessageAction(label="預約勘場", text="預約勘場")),
                     QuickReplyButton(action=MessageAction(label="繼續估價請按這裡", text="繼續估價請按這裡"))
