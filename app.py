@@ -372,6 +372,19 @@ def handle_message(event):
     elif msg == "上一步 ↩":
         _handle_back(uid, event)
         return
+    elif msg == "預約勘場":
+        line_states[uid] = {"waiting_address": True, "contact": customer_contacts.get(uid)}
+        line_bot_api.reply_message(event.reply_token,
+            TextSendMessage(text="請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）"))
+        return
+    elif line_states.get(uid, {}).get("waiting_address"):
+        address = msg
+        contact = line_states[uid].get("contact", "")
+        notify_owner(f"📍 客戶預約勘場\n客戶：{contact}\n地址：{address}")
+        line_states[uid] = {"post_quote": True}
+        line_bot_api.reply_message(event.reply_token,
+            TextSendMessage(text="收到！我們會儘快安排專人與您聯繫確認勘場時間 😊"))
+        return
     elif line_states.get(uid, {}).get("waiting_contact_choice"):
         if msg in ["留電話", "留LINE ID"]:
             line_states[uid]["contact_type"] = msg
@@ -408,12 +421,13 @@ def handle_message(event):
         sample_img = _img("暗架天花板.jpg")
         line_bot_api.reply_message(event.reply_token, [
             TextSendMessage(
-                text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n專人儘快為你服務 😊\n\n只要上傳現場照片即可獲更多優惠價格\n\n如需場勘請留詳細地址電話"
+                text=quote + f"\n\n您留的聯絡資訊：{msg}\n\n只要上傳現場照片即可獲更多優惠價格"
             ),
             ImageSendMessage(original_content_url=sample_img, preview_image_url=sample_img),
             TextSendMessage(
                 text="更多施工現場照片案例請點這裡\nhttps://sites.google.com/view/0973687898/home",
                 quick_reply=QuickReply(items=[
+                    QuickReplyButton(action=MessageAction(label="預約勘場", text="預約勘場")),
                     QuickReplyButton(action=MessageAction(label="繼續估價請按這裡", text="繼續估價請按這裡"))
                 ])
             )
