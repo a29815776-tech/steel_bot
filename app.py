@@ -5,7 +5,8 @@ from linebot.models import (MessageEvent, TextMessage, TextSendMessage,
                              ImageMessage, VideoMessage, ImageSendMessage,
                              QuickReply, QuickReplyButton, MessageAction,
                              FollowEvent, TemplateSendMessage, CarouselTemplate,
-                             CarouselColumn, MessageTemplateAction)
+                             CarouselColumn, MessageTemplateAction,
+                             ButtonsTemplate, URITemplateAction)
 from groq import Groq
 from io import BytesIO
 from urllib.parse import quote as urlquote
@@ -442,7 +443,15 @@ def handle_message(event):
     # 報價完成後客戶繼續發言 → 引導至個人 LINE
     if state.get("post_quote"):
         line_bot_api.reply_message(event.reply_token,
-            TextSendMessage(text="更多諮詢請點連結由專人為您服務\nhttps://line.me/ti/p/~0973687898"))
+            TemplateSendMessage(
+                alt_text="有其他問題請聯繫我們",
+                template=ButtonsTemplate(
+                    text="有其他問題嗎？點下方按鈕由專人為您服務 😊",
+                    actions=[
+                        URITemplateAction(label="專人服務", uri="https://line.me/ti/p/~0973687898")
+                    ]
+                )
+            ))
         return
 
     # 沒有進行中的流程，顯示歡迎詞（排除流程中的有效選項）
