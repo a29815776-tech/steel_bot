@@ -61,7 +61,7 @@ MATERIAL_PRICES = {
     ("天花板", "暗架企口鋁板"):       4500,
     ("輕隔間", "石膏板"):             3000,
     ("輕隔間", "矽酸鈣板"):           4000,
-    ("輕隔間", "水泥板"):             4200,
+    ("輕隔間", "水泥板"):             4500,
 }
 FLOOR_ADDS = {"天花板": 100, "輕隔間": 150}
 
@@ -90,13 +90,11 @@ def calculate_price(service, material, ping, floor):
     base = MATERIAL_PRICES.get((service, material), 0)
     if base == 0:
         return None
-    floor_surcharge = FLOOR_ADDS[service] * (floor - 1)
-    unit_price = base + floor_surcharge
     if ping < 10:   size_rate = 1.20
-    elif ping < 20: size_rate = 1.15
-    elif ping < 30: size_rate = 1.10
+    elif ping < 20: size_rate = 1.10
+    elif ping < 30: size_rate = 1.05
     else:           size_rate = 1.00
-    return round(unit_price * ping * size_rate)
+    return round(base * ping * size_rate)
 
 
 def extract_info(user_message):
@@ -120,16 +118,13 @@ def extract_info(user_message):
 def format_quote(service, material, ping, floor):
     price = calculate_price(service, material, ping, floor)
     base = MATERIAL_PRICES.get((service, material), 0)
-    floor_add = FLOOR_ADDS[service] * (floor - 1)
-    size_pct = 20 if ping < 10 else (15 if ping < 20 else (10 if ping < 30 else 0))
+    size_pct = 20 if ping < 10 else (10 if ping < 20 else (5 if ping < 30 else 0))
     lines = [
         "📋 報價明細", "─────────────",
         f"項目：{service}", f"材質：{material}",
         f"坪數：{ping}坪", f"樓層：{floor}樓", "",
         f"基本單價：{base}元/坪",
     ]
-    if floor_add > 0:
-        lines.append(f"樓層加價：+{FLOOR_ADDS[service]}元/坪 × {floor-1} = +{floor_add}元/坪")
     if size_pct > 0:
         lines.append(f"小坪數加價：+{size_pct}%")
     lines += ["", f"💰 預估總價：{price:,} 元", "─────────────",
@@ -229,14 +224,12 @@ def material_carousel(service):
     return TemplateSendMessage(alt_text="請選擇材質", template=CarouselTemplate(columns=columns))
 
 def line_format_quote(service, material, ping, floor_label, area):
-    floor = FLOOR_DATA[floor_label]
     base = MATERIAL_PRICES.get((service, material), 0)
-    floor_add = FLOOR_ADDS[service] * (floor - 1)
     if ping < 10:   rate = 1.20
-    elif ping < 20: rate = 1.15
-    elif ping < 30: rate = 1.10
+    elif ping < 20: rate = 1.10
+    elif ping < 30: rate = 1.05
     else:           rate = 1.00
-    total = round((base + floor_add) * ping * rate)
+    total = round(base * ping * rate)
     lines = ["📋 報價結果", "─────────────",
              f"項目：{service}", f"材質：{material}",
              f"坪數：{int(ping)}坪", f"位置：{floor_label}",
