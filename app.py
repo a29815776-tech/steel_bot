@@ -223,7 +223,7 @@ def material_carousel(service):
     ]
     return TemplateSendMessage(alt_text="請選擇材質", template=CarouselTemplate(columns=columns))
 
-def line_format_quote(service, material, ping, floor_label, area):
+def line_format_quote(service, material, ping, floor_label=None, area=None):
     base = MATERIAL_PRICES.get((service, material), 0)
     if ping < 10:   rate = 1.20
     elif ping < 20: rate = 1.10
@@ -232,10 +232,14 @@ def line_format_quote(service, material, ping, floor_label, area):
     total = round(base * ping * rate)
     lines = ["📋 報價結果", "─────────────",
              f"項目：{service}", f"材質：{material}",
-             f"坪數：{int(ping)}坪", f"位置：{floor_label}",
-             f"區域：{area}", "─────────────",
-             f"💰 預估總價：{total:,} 元", "─────────────",
-             "以上為預估價，實際費用依現場丈量為準。"]
+             f"坪數：{int(ping)}坪"]
+    if floor_label:
+        lines.append(f"位置：{floor_label}")
+    if area:
+        lines.append(f"區域：{area}")
+    lines += ["─────────────",
+              f"💰 預估總價：{total:,} 元", "─────────────",
+              "以上為預估價，實際費用依現場丈量為準。"]
     return "\n".join(lines)
 
 def smart_reply(user_message, state, next_prompt, options):
@@ -509,6 +513,10 @@ def handle_message(event):
     if "ping_range" not in state:
         if msg in PING_OPTIONS:
             state["ping_range"] = msg
+            sub_opts = PING_SUB_OPTIONS[msg]
+            line_bot_api.reply_message(event.reply_token,
+                quick("請選擇實際坪數：", sub_opts + ["上一步 ↩"]))
+            return
         else:
             text, show_menu = smart_reply(msg, state, "坪數範圍", PING_OPTIONS)
             line_bot_api.reply_message(event.reply_token,
@@ -519,6 +527,25 @@ def handle_message(event):
         sub_opts = PING_SUB_OPTIONS[state["ping_range"]]
         if msg in sub_opts:
             state["ping"] = float(msg.replace("坪", ""))
+            quote = line_format_quote(state["service"], state["material"], state["ping"])
+            line_states[uid] = {"post_quote": True}
+            line_bot_api.reply_message(event.reply_token, [
+                TextSendMessage(text=quote + "\n\n想獲得更準確價格，可上傳現場照片或預約勘場。"),
+                TemplateSendMessage(
+                    alt_text="報價完成",
+                    template=ButtonsTemplate(
+                        text="需要後續協助嗎？",
+                        actions=[
+                            MessageTemplateAction(label="預約勘場", text="預約勘場"),
+                            URITemplateAction(label="專人服務", uri="https://line.me/ti/p/~0973687898")
+                        ]
+                    ),
+                    quick_reply=QuickReply(items=[
+                        QuickReplyButton(action=MessageAction(label="繼續估價請按這裡", text="繼續估價請按這裡"))
+                    ])
+                )
+            ])
+            return
         else:
             text, show_menu = smart_reply(msg, state, "精確坪數", sub_opts)
             line_bot_api.reply_message(event.reply_token,
