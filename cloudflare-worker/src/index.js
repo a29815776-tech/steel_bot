@@ -59,11 +59,17 @@ export default {
       return new Response("OK", { status: 200 });
     }
     if (!(await verifyLineSignature(body, signature, env.LINE_CHANNEL_SECRET))) {
+      console.log(`bad signature: events=${payload.events.length}, bodyLength=${body.length}, signatureLength=${signature.length}`);
       return new Response("bad signature", { status: 400 });
     }
 
-    for (const event of payload.events) {
-      await handleEvent(event, env, url.origin);
+    try {
+      for (const event of payload.events) {
+        await handleEvent(event, env, url.origin);
+      }
+    } catch (error) {
+      console.log(`event handling error: ${error?.name || "Error"}: ${error?.message || error}`);
+      return new Response("event handling error", { status: 500 });
     }
     return new Response("OK", { status: 200 });
   }
@@ -271,7 +277,7 @@ function quickReply(options) {
 }
 
 async function reply(env, replyToken, messages) {
-  await fetch("https://api.line.me/v2/bot/message/reply", {
+  const response = await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -279,6 +285,9 @@ async function reply(env, replyToken, messages) {
     },
     body: JSON.stringify({ replyToken, messages })
   });
+  if (!response.ok) {
+    console.log(`LINE reply failed: ${response.status} ${await response.text()}`);
+  }
 }
 
 async function pushOwner(env, message) {
@@ -288,7 +297,7 @@ async function pushOwner(env, message) {
 
 async function pushOwnerMessages(env, messages) {
   if (!env.OWNER_LINE_ID) return;
-  await fetch("https://api.line.me/v2/bot/message/push", {
+  const response = await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -296,6 +305,9 @@ async function pushOwnerMessages(env, messages) {
     },
     body: JSON.stringify({ to: env.OWNER_LINE_ID, messages })
   });
+  if (!response.ok) {
+    console.log(`LINE push failed: ${response.status} ${await response.text()}`);
+  }
 }
 
 async function forwardImageToOwner(event, env, uid, origin) {
