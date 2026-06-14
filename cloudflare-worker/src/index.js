@@ -45,6 +45,9 @@ export default {
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
       return new Response("ok", { status: 200 });
     }
+    if (request.method === "GET" && url.pathname.startsWith("/media/")) {
+      return serveMedia(url.pathname.slice("/media/".length), env);
+    }
     if (request.method !== "POST" || url.pathname !== "/callback") {
       return new Response("not found", { status: 404 });
     }
@@ -57,18 +60,22 @@ export default {
 
     const payload = JSON.parse(body);
     for (const event of payload.events || []) {
-      await handleEvent(event, env);
+      await handleEvent(event, env, url.origin);
     }
     return new Response("OK", { status: 200 });
   }
 };
 
-async function handleEvent(event, env) {
+async function handleEvent(event, env, origin) {
   if (event.type !== "message" || !event.source?.userId) return;
   const uid = event.source.userId;
 
   if (event.message?.type === "image" || event.message?.type === "video") {
-    await pushOwner(env, `📷 客戶上傳了${event.message.type === "image" ? "照片" : "影片"}\nLINE ID：${uid}`);
+    if (event.message.type === "image") {
+      await forwardImageToOwner(event, env, uid, origin);
+    } else {
+      await pushOwner(env, `🎥 客戶上傳了影片\nLINE ID：${uid}`);
+    }
     await reply(env, event.replyToken, [
       text("感謝你上傳照片！專人服務會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898")
     ]);
@@ -273,13 +280,57 @@ async function reply(env, replyToken, messages) {
 
 async function pushOwner(env, message) {
   if (!env.OWNER_LINE_ID) return;
+  await pushOwnerMessages(env, [text(message)]);
+}
+
+async function pushOwnerMessages(env, messages) {
+  if (!env.OWNER_LINE_ID) return;
   await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`
     },
-    body: JSON.stringify({ to: env.OWNER_LINE_ID, messages: [text(message)] })
+    body: JSON.stringify({ to: env.OWNER_LINE_ID, messages })
+  });
+}
+
+async function forwardImageToOwner(event, env, uid, origin) {
+  const mediaId = crypto.randomUUID();
+  const response = await fetch(`https://api-data.line.me/v2/bot/message/${event.message.id}/content`, {
+    headers: { authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}` }
+  });
+  if (!response.ok) {
+    await pushOwner(env, `📷 客戶上傳了照片，但圖片下載失敗\nLINE ID：${uid}`);
+    return;
+  }
+
+  const contentType = response.headers.get("content-type") || "image/jpeg";
+  const bytes = await response.arrayBuffer();
+  await env.STEEL_BOT_KV.put(`media:${mediaId}`, bytes, {
+    expirationTtl: 60 * 60 * 24 * 7,
+    metadata: { contentType }
+  });
+
+  const imageUrl = `${origin}/media/${mediaId}`;
+  await pushOwnerMessages(env, [
+    text(`📷 客戶上傳了照片\nLINE ID：${uid}`),
+    {
+      type: "image",
+      originalContentUrl: imageUrl,
+      previewImageUrl: imageUrl
+    }
+  ]);
+}
+
+async function serveMedia(mediaId, env) {
+  const result = await env.STEEL_BOT_KV.getWithMetadata(`media:${mediaId}`, "arrayBuffer");
+  if (!result.value) return new Response("not found", { status: 404 });
+  return new Response(result.value, {
+    headers: {
+      "content-type": result.metadata?.contentType || "image/jpeg",
+      "cache-control": "public, max-age=604800"
+    }
   });
 }
 
