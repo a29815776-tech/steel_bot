@@ -53,13 +53,16 @@ export default {
     }
 
     const body = await request.text();
+    const payload = JSON.parse(body);
     const signature = request.headers.get("x-line-signature") || "";
+    if (!Array.isArray(payload.events) || payload.events.length === 0) {
+      return new Response("OK", { status: 200 });
+    }
     if (!(await verifyLineSignature(body, signature, env.LINE_CHANNEL_SECRET))) {
       return new Response("bad signature", { status: 400 });
     }
 
-    const payload = JSON.parse(body);
-    for (const event of payload.events || []) {
+    for (const event of payload.events) {
       await handleEvent(event, env, url.origin);
     }
     return new Response("OK", { status: 200 });
