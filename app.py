@@ -180,6 +180,9 @@ def callback():
         handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
+    except Exception as exc:
+        print(f"LINE webhook error: {type(exc).__name__}: {exc}", flush=True)
+        abort(500)
     return "OK"
 
 
@@ -360,6 +363,12 @@ def handle_message(event):
     if msg == "我的id":
         line_bot_api.reply_message(event.reply_token,
             TextSendMessage(text=f"您的 ID：{uid}"))
+        return
+
+    if msg.lower() in ["你好", "哈囉", "哈啰", "嗨", "hi", "hello"]:
+        line_states[uid] = {}
+        line_bot_api.reply_message(event.reply_token,
+            quick("歡迎來到百工宅修！👋\n請選擇您要的裝修需求：", ["天花板", "輕隔間"]))
         return
 
     if msg in ["重新", "重來", "再估一個", "繼續估價請按這裡", "開始", "報價", "我要估價"]:
