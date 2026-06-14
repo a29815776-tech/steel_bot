@@ -2,6 +2,16 @@ name = "steel-bot-worker"
 main = "src/index.js"
 compatibility_date = "2026-06-14"
 
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
 [[kv_namespaces]]
 binding = "STEEL_BOT_KV"
 id = "de74cd985c2146a09329cb9a7148650a"
