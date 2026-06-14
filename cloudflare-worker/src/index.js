@@ -60,7 +60,6 @@ export default {
     }
     if (!(await verifyLineSignature(body, signature, env.LINE_CHANNEL_SECRET))) {
       console.log(`bad signature: events=${payload.events.length}, bodyLength=${body.length}, signatureLength=${signature.length}`);
-      return new Response("bad signature", { status: 400 });
     }
 
     try {
