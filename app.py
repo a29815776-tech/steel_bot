@@ -246,11 +246,13 @@ def line_format_quote(service, material, ping, floor_label=None, area=None):
     return "\n".join(lines)
 
 def smart_reply(user_message, state, next_prompt, options):
-    labels = {"service":"施工項目","material":"材質","ping_range":"坪數範圍","ping":"坪數","floor":"樓層","area":"區域"}
-    known = "、".join(f"{labels[k]}={v}" for k,v in state.items() if v is not None and k in labels)
-    has_state = bool(known)
-    context = f"客人正在報價流程中，已知：{known}，下一步選擇：{next_prompt}（選項：{'、'.join(options)}）" if has_state else "客人尚未開始報價流程。"
-    system = f"""你是百工宅修工程行的 AI 報價助理，專做天花板和輕隔間工程。
+    fallback_text = f"請選擇{next_prompt}："
+    try:
+        labels = {"service":"施工項目","material":"材質","ping_range":"坪數範圍","ping":"坪數","floor":"樓層","area":"區域"}
+        known = "、".join(f"{labels[k]}={v}" for k,v in state.items() if v is not None and k in labels)
+        has_state = bool(known)
+        context = f"客人正在報價流程中，已知：{known}，下一步選擇：{next_prompt}（選項：{'、'.join(options)}）" if has_state else "客人尚未開始報價流程。"
+        system = f"""你是百工宅修工程行的 AI 報價助理，專做天花板和輕隔間工程。
 {context}
 
 判斷客人訊息，用以下格式回覆：
@@ -267,18 +269,21 @@ MENU: → 回答後顯示選單
 - 不確定意圖的訊息 → 優先選 MENU:，不要選 CHAT:
 
 純文字不超過60字，只回覆 CHAT: 或 MENU: 開頭。"""
-    resp = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role":"system","content":system},{"role":"user","content":user_message}],
-        temperature=0.4, max_tokens=120,
-    )
-    raw = resp.choices[0].message.content.strip()
-    if raw.startswith("CHAT:"):
-        text = "這個問題我無法回答，請直接聯繫專人服務 😊\nhttps://line.me/ti/p/~0973687898"
-        return text, False
-    elif raw.startswith("MENU:"):
-        return raw[5:].strip(), True
-    return raw, True
+        resp = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role":"system","content":system},{"role":"user","content":user_message}],
+            temperature=0.4, max_tokens=120,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("CHAT:"):
+            text = "這個問題我無法回答，請直接聯繫專人服務 😊\nhttps://line.me/ti/p/~0973687898"
+            return text, False
+        elif raw.startswith("MENU:"):
+            return raw[5:].strip(), True
+        return raw, True
+    except Exception as exc:
+        print(f"smart_reply fallback: {type(exc).__name__}: {exc}", flush=True)
+        return fallback_text, True
 
 def notify_owner(msg):
     if OWNER_LINE_ID:
