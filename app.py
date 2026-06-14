@@ -625,6 +625,10 @@ def handle_media(event):
 def index():
     return render_template("demo.html")
 
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
 @app.route("/demo_chat", methods=["POST"])
 def demo_chat():
     data = request.json

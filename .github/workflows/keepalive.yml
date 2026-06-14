@@ -1,0 +1,14 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping steel bot
+        run: |
+          curl --fail --silent --show-error --max-time 30 https://steel-bot.onrender.com/healthz
