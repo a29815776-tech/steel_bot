@@ -45,6 +45,9 @@ export default {
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
       return new Response("ok", { status: 200 });
     }
+    if (request.method === "GET" && url.pathname === "/diag/line-token") {
+      return checkLineToken(env);
+    }
     if (request.method === "GET" && url.pathname.startsWith("/media/")) {
       return serveMedia(url.pathname.slice("/media/".length), env);
     }
@@ -307,6 +310,16 @@ async function pushOwnerMessages(env, messages) {
   if (!response.ok) {
     console.log(`LINE push failed: ${response.status} ${await response.text()}`);
   }
+}
+
+async function checkLineToken(env) {
+  const response = await fetch("https://api.line.me/v2/bot/info", {
+    headers: { authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}` }
+  });
+  return Response.json({
+    ok: response.ok,
+    status: response.status
+  }, { status: response.ok ? 200 : 500 });
 }
 
 async function forwardImageToOwner(event, env, uid, origin) {
