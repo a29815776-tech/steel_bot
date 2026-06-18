@@ -283,7 +283,7 @@ async function reply(env, replyToken, messages) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`
+      authorization: `Bearer ${lineAccessToken(env)}`
     },
     body: JSON.stringify({ replyToken, messages })
   });
@@ -303,7 +303,7 @@ async function pushOwnerMessages(env, messages) {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`
+      authorization: `Bearer ${lineAccessToken(env)}`
     },
     body: JSON.stringify({ to: env.OWNER_LINE_ID, messages })
   });
@@ -313,19 +313,26 @@ async function pushOwnerMessages(env, messages) {
 }
 
 async function checkLineToken(env) {
+  const rawToken = String(env.LINE_CHANNEL_ACCESS_TOKEN || "");
+  const token = lineAccessToken(env);
   const response = await fetch("https://api.line.me/v2/bot/info", {
-    headers: { authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}` }
+    headers: { authorization: `Bearer ${token}` }
   });
   return Response.json({
     ok: response.ok,
-    status: response.status
+    status: response.status,
+    tokenPresent: token.length > 0,
+    rawLength: rawToken.length,
+    normalizedLength: token.length,
+    hasWhitespace: /\s/.test(rawToken),
+    startsWithBearer: /^Bearer\s+/i.test(rawToken)
   }, { status: response.ok ? 200 : 500 });
 }
 
 async function forwardImageToOwner(event, env, uid, origin) {
   const mediaId = crypto.randomUUID();
   const response = await fetch(`https://api-data.line.me/v2/bot/message/${event.message.id}/content`, {
-    headers: { authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}` }
+    headers: { authorization: `Bearer ${lineAccessToken(env)}` }
   });
   if (!response.ok) {
     await pushOwner(env, `📷 客戶上傳了照片，但圖片下載失敗\nLINE ID：${uid}`);
@@ -359,6 +366,12 @@ async function serveMedia(mediaId, env) {
       "cache-control": "public, max-age=604800"
     }
   });
+}
+
+function lineAccessToken(env) {
+  return String(env.LINE_CHANNEL_ACCESS_TOKEN || "")
+    .replace(/^Bearer\s+/i, "")
+    .replace(/\s+/g, "");
 }
 
 async function getState(env, uid) {
