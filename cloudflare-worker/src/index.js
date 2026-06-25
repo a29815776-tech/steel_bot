@@ -179,6 +179,11 @@ async function handleEvent(event, env, origin, ctx) {
   }
 
   if (state.waiting_contact) {
+    if (!isValidContactInfo(msg)) {
+      await reply(env, event.replyToken, [text(invalidContactPrompt())]);
+      return;
+    }
+
     const quoteState = {
       service: state.service,
       material: state.material,
@@ -218,6 +223,11 @@ async function handleEvent(event, env, origin, ctx) {
   }
 
   if (state.waiting_photo_contact || state.waiting_video_contact) {
+    if (!isValidContactInfo(msg)) {
+      await reply(env, event.replyToken, [text(invalidContactPrompt())]);
+      return;
+    }
+
     const lead = {
       type: state.waiting_photo_contact ? "照片詢問" : "影片詢問",
       userId: uid,
@@ -481,6 +491,27 @@ function normalizeText(message) {
     .trim()
     .replace(/\s+/g, "")
     .replace(/得/g, "的");
+}
+
+function isValidContactInfo(message) {
+  const value = String(message || "").trim();
+  const digits = value.replace(/\D/g, "");
+  const namePart = value
+    .replace(/[0-9０-９\s/@_\-+()（）.。,:：;；，、]/g, "")
+    .trim();
+  const hasName = /[\u4e00-\u9fffA-Za-z]{2,}/.test(namePart);
+  const hasPhone = /(?:\+?886[-\s]?)?0?9\d{8}/.test(digits)
+    || /0\d{7,9}/.test(digits)
+    || digits.length >= 8;
+  return hasName && hasPhone;
+}
+
+function invalidContactPrompt() {
+  return [
+    "請留下姓名及電話，才能通知專人服務。",
+    "不要只填數字或測試文字。",
+    "範例：王先生 / 0912-345-678"
+  ].join("\n");
 }
 
 function isStartQuoteIntent(message) {
