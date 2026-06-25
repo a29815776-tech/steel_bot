@@ -199,6 +199,8 @@ AREA_OPTIONS = ["台北市", "新北市", "桃園", "基隆", "宜蘭"]
 STEP_ORDER = ["service", "material", "ping_range", "ping", "floor", "area"]
 
 OWNER_LINE_ID = os.environ.get("OWNER_LINE_ID", "")
+DEFAULT_OWNER_LINE_ID = "U1e1025f5f3ed4bba4612e4e5a66692ad"
+OWNER_NOTIFY_IDS = os.environ.get("OWNER_NOTIFY_IDS", DEFAULT_OWNER_LINE_ID)
 BASE_URL = os.environ.get("BASE_URL", "https://steel-bot.onrender.com")
 
 image_store = {}
@@ -285,12 +287,39 @@ MENU: → 回答後顯示選單
         print(f"smart_reply fallback: {type(exc).__name__}: {exc}", flush=True)
         return fallback_text, True
 
-def notify_owner(msg):
-    if OWNER_LINE_ID:
+def _owner_ids():
+    raw = OWNER_NOTIFY_IDS or DEFAULT_OWNER_LINE_ID or OWNER_LINE_ID
+    ids = []
+    for value in re.split(r"[,，\s]+", raw):
+        value = value.strip()
+        if value and value not in ids:
+            ids.append(value)
+    return ids
+
+
+def _mask_line_id(line_id):
+    return line_id if len(line_id) <= 10 else f"{line_id[:6]}...{line_id[-4:]}"
+
+
+def push_owner_messages(messages):
+    owner_ids = _owner_ids()
+    if not owner_ids:
+        print("LINE owner push skipped: no owner IDs", flush=True)
+        return False
+
+    success = False
+    for owner_id in owner_ids:
         try:
-            line_bot_api.push_message(OWNER_LINE_ID, TextSendMessage(text=msg))
-        except Exception:
-            pass
+            line_bot_api.push_message(owner_id, messages)
+            print(f"LINE owner push ok: {_mask_line_id(owner_id)}", flush=True)
+            success = True
+        except Exception as exc:
+            print(f"LINE owner push failed: {_mask_line_id(owner_id)} {type(exc).__name__}: {exc}", flush=True)
+    return success
+
+
+def notify_owner(msg):
+    return push_owner_messages(TextSendMessage(text=msg))
 
 def _handle_back(uid, event):
     state = line_states.get(uid, {})
@@ -604,17 +633,15 @@ def handle_media(event):
         img_id = str(uuid.uuid4())
         image_store[img_id] = img_bytes
         img_url = f"{BASE_URL}/img/{img_id}"
-        if OWNER_LINE_ID:
-            try:
-                contact = customer_contacts.get(uid)
-                if contact:
-                    owner_msg = f"📷 客戶上傳了照片\n\n👤 客戶姓名電話：\n{contact}"
-                else:
-                    owner_msg = "📷 客戶上傳了照片\n\n（客戶尚未留下聯絡資料）"
-                line_bot_api.push_message(OWNER_LINE_ID, TextSendMessage(text=owner_msg))
-                line_bot_api.push_message(OWNER_LINE_ID, ImageSendMessage(original_content_url=img_url, preview_image_url=img_url))
-            except Exception:
-                pass
+        contact = customer_contacts.get(uid)
+        if contact:
+            owner_msg = f"📷 客戶上傳了照片\n\n👤 客戶資料：\n{contact}"
+        else:
+            owner_msg = "📷 客戶上傳了照片\n\n（客戶尚未留下聯絡資料）"
+        push_owner_messages([
+            TextSendMessage(text=owner_msg),
+            ImageSendMessage(original_content_url=img_url, preview_image_url=img_url)
+        ])
         contact = customer_contacts.get(uid)
         if contact:
             reply_text = "感謝你上傳照片！如需預約現場丈量請留詳細地址，專人服務會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898"
@@ -633,6 +660,21 @@ def index():
 @app.route("/healthz")
 def healthz():
     return "ok", 200
+
+@app.route("/admin/test-owner")
+def admin_test_owner():
+    code = request.args.get("code", "")
+    expected = os.environ.get("OWNER_BIND_CODE", "0973687898")
+    if code != expected:
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+
+    ok = push_owner_messages(TextSendMessage(
+        text=f"測試通知：Render 老闆 LINE 推播成功\n時間：測試"
+    ))
+    return jsonify({
+        "ok": ok,
+        "owners": [_mask_line_id(owner_id) for owner_id in _owner_ids()]
+    })
 
 @app.route("/demo_chat", methods=["POST"])
 def demo_chat():
