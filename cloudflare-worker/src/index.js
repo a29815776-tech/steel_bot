@@ -515,7 +515,7 @@ function isValidContactInfo(message) {
 function invalidContactPrompt() {
   return [
     "請留下姓名及電話，才能通知專人服務。",
-    "不要只填數字或測試文字。",
+    "可以使用測試姓名，但電話需為有效手機或市話。",
     "範例：王先生 / 0912-345-678"
   ].join("\n");
 }
