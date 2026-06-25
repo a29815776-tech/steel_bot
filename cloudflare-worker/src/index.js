@@ -26,6 +26,7 @@ const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與�
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 const OWNER_BIND_CODE_FALLBACK = "0973687898";
+const BUILD_ID = "contact-fallback-20260626";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -64,6 +65,12 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/admin/notify-status") {
       return adminNotifyStatus(url, env);
+    }
+    if (request.method === "GET" && url.pathname === "/admin/version") {
+      return adminVersion(url, env);
+    }
+    if (request.method === "GET" && url.pathname === "/admin/recent") {
+      return adminRecent(url, env);
     }
     if (request.method !== "POST" || url.pathname !== "/callback") {
       return new Response("not found", { status: 404 });
@@ -185,6 +192,20 @@ async function handleEvent(event, env, origin, ctx) {
         ? "收到！我們會儘快安排專人與您聯繫確認勘場時間 😊"
         : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。")
     ]);
+    return;
+  }
+
+  if (!state.post_quote && isValidContactInfo(msg) && hasCompleteQuote(state)) {
+    await handleQuoteContact(env, uid, event.replyToken, msg, { ...state, waiting_contact: true });
+    return;
+  }
+
+  if (!state.post_quote && isValidContactInfo(msg) && hasPendingMedia(state)) {
+    await handleMediaContact(env, uid, event.replyToken, msg, {
+      ...state,
+      waiting_photo_contact: Boolean(state.imageUrl || state.mediaId || state.imageSaved),
+      waiting_video_contact: Boolean(state.videoReceivedAt)
+    });
     return;
   }
 
@@ -370,6 +391,14 @@ function quoteTotal(service, material, ping) {
   const base = MATERIAL_PRICES[`${service}|${material}`] || 0;
   const rate = ping < 10 ? 1.2 : ping < 20 ? 1.1 : ping < 30 ? 1.05 : 1;
   return Math.round(base * ping * rate);
+}
+
+function hasCompleteQuote(state) {
+  return Boolean(state?.service && state?.material && Number.isFinite(Number(state?.ping)));
+}
+
+function hasPendingMedia(state) {
+  return Boolean(state?.imageUrl || state?.mediaId || state?.imageSaved || state?.videoReceivedAt);
 }
 
 function materialCarousel(service) {
@@ -724,6 +753,52 @@ async function adminNotifyStatus(url, env) {
     ok: true,
     owners: (await ownerLineIds(env)).map(maskLineId),
     notify
+  }, {
+    headers: { "cache-control": "no-store" }
+  });
+}
+
+async function adminVersion(url, env) {
+  if (!isAdminRequest(url, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+  }
+
+  return Response.json({
+    ok: true,
+    build: BUILD_ID,
+    owners: (await ownerLineIds(env)).map(maskLineId)
+  }, {
+    headers: { "cache-control": "no-store" }
+  });
+}
+
+async function adminRecent(url, env) {
+  if (!isAdminRequest(url, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+  }
+
+  let recent = [];
+  try {
+    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
+  } catch (_) {
+    recent = [];
+  }
+
+  return Response.json({
+    ok: true,
+    count: recent.length,
+    leads: recent.slice(0, 10).map((lead) => ({
+      createdAt: lead.createdAt,
+      type: lead.type,
+      contact: lead.contact || "",
+      service: lead.service || "",
+      material: lead.material || "",
+      ping: lead.ping || "",
+      total: lead.total || "",
+      address: lead.address || "",
+      imageSaved: Boolean(lead.imageSaved),
+      hasImageUrl: Boolean(lead.imageUrl)
+    }))
   }, {
     headers: { "cache-control": "no-store" }
   });
