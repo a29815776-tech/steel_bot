@@ -56,6 +56,9 @@ export default {
     if (request.method === "GET" && url.pathname.startsWith("/media/")) {
       return serveMedia(url.pathname.slice("/media/".length), env);
     }
+    if (request.method === "GET" && url.pathname === "/admin/bind-owner") {
+      return adminBindOwner(url, env);
+    }
     if (request.method !== "POST" || url.pathname !== "/callback") {
       return new Response("not found", { status: 404 });
     }
@@ -570,7 +573,34 @@ async function bindOwner(env, uid, replyToken, message) {
     status: 200,
     message: `已綁定老闆 LINE：${maskLineId(targetId)}`
   });
-  await reply(env, replyToken, [text(`已綁定老闆通知帳號。\n通知會傳到：${targetId}`)]);
+  await reply(env, replyToken, [text("已綁定老闆通知帳號。")]);
+}
+
+async function adminBindOwner(url, env) {
+  const expectedCode = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
+  const code = String(url.searchParams.get("code") || "").trim();
+  if (!expectedCode || code !== expectedCode) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+  }
+
+  const ownerId = String(url.searchParams.get("id") || "").trim();
+  if (!/^U[a-fA-F0-9]{32}$/.test(ownerId)) {
+    return Response.json({ ok: false, error: "invalid LINE userId" }, { status: 400 });
+  }
+
+  await env.STEEL_BOT_KV.put("owner:line_ids", JSON.stringify([ownerId]));
+  await setLastNotifyStatus(env, {
+    ok: true,
+    status: 200,
+    message: `已由後台綁定老闆 LINE：${maskLineId(ownerId)}`
+  });
+
+  return Response.json({
+    ok: true,
+    owner: maskLineId(ownerId)
+  }, {
+    headers: { "cache-control": "no-store" }
+  });
 }
 
 async function ownerLineIds(env) {
@@ -711,8 +741,7 @@ function leadSummary(lead) {
 
 function leadSummaryLines(lead) {
   const lines = [
-    `客戶資料：${lead.contact || "未留"}`,
-    `LINE ID：${lead.userId || "未知"}`
+    `客戶資料：${lead.contact || "未留"}`
   ];
   if (lead.service || lead.material || lead.ping) {
     lines.push(`項目：${lead.service || "未選"}／${lead.material || "未選"}`);
