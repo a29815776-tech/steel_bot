@@ -558,37 +558,43 @@ function isOwnerBindIntent(message) {
 async function bindOwner(env, uid, replyToken, message) {
   const code = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
   if (!code || !String(message || "").includes(code)) {
-    await reply(env, replyToken, [text(`請輸入：綁定老闆 ${code}`)]);
+    await reply(env, replyToken, [text(`請輸入：綁定老闆 ${code}\n或：綁定老闆ID U開頭的LINE_ID ${code}`)]);
     return;
   }
 
-  const ids = await ownerLineIds(env);
-  if (!ids.includes(uid)) ids.unshift(uid);
-  await env.STEEL_BOT_KV.put("owner:line_ids", JSON.stringify(ids.slice(0, 5)));
+  const targetId = extractLineUserId(message) || uid;
+  const ids = [targetId];
+  await env.STEEL_BOT_KV.put("owner:line_ids", JSON.stringify(ids));
   await setLastNotifyStatus(env, {
     ok: true,
     status: 200,
-    message: `已綁定老闆 LINE，目標數量：${ids.length}`
+    message: `已綁定老闆 LINE：${maskLineId(targetId)}`
   });
-  await reply(env, replyToken, [text(`已綁定這個 LINE 為老闆通知帳號。\nLINE ID：${uid}`)]);
+  await reply(env, replyToken, [text(`已綁定老闆通知帳號。\n通知會傳到：${targetId}`)]);
 }
 
 async function ownerLineIds(env) {
-  const ids = [];
-  const envOwner = String(env.OWNER_LINE_ID || "").trim();
-  if (envOwner) ids.push(envOwner);
-
   try {
     const bound = JSON.parse((await env.STEEL_BOT_KV.get("owner:line_ids")) || "[]");
+    const ids = [];
     for (const id of bound) {
       const cleanId = String(id || "").trim();
       if (cleanId && !ids.includes(cleanId)) ids.push(cleanId);
     }
+    if (ids.length) return ids;
   } catch (_) {
     // Ignore malformed owner bindings and keep the environment fallback.
   }
 
+  const ids = [];
+  const envOwner = String(env.OWNER_LINE_ID || "").trim();
+  if (envOwner) ids.push(envOwner);
   return ids;
+}
+
+function extractLineUserId(message) {
+  const match = String(message || "").match(/\bU[a-fA-F0-9]{32}\b/);
+  return match ? match[0] : "";
 }
 
 async function notifyLeadSafely(env, lead) {
