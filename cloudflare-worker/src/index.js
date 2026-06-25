@@ -59,6 +59,12 @@ export default {
     if (request.method === "GET" && url.pathname === "/admin/bind-owner") {
       return adminBindOwner(url, env);
     }
+    if (request.method === "GET" && url.pathname === "/admin/test-owner") {
+      return adminTestOwner(url, env);
+    }
+    if (request.method === "GET" && url.pathname === "/admin/notify-status") {
+      return adminNotifyStatus(url, env);
+    }
     if (request.method !== "POST" || url.pathname !== "/callback") {
       return new Response("not found", { status: 404 });
     }
@@ -577,9 +583,7 @@ async function bindOwner(env, uid, replyToken, message) {
 }
 
 async function adminBindOwner(url, env) {
-  const expectedCode = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
-  const code = String(url.searchParams.get("code") || "").trim();
-  if (!expectedCode || code !== expectedCode) {
+  if (!isAdminRequest(url, env)) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
   }
 
@@ -601,6 +605,77 @@ async function adminBindOwner(url, env) {
   }, {
     headers: { "cache-control": "no-store" }
   });
+}
+
+async function adminTestOwner(url, env) {
+  if (!isAdminRequest(url, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+  }
+
+  const targets = await ownerLineIds(env);
+  if (!targets.length) {
+    return Response.json({ ok: false, error: "no owner bound" }, { status: 400 });
+  }
+
+  const results = [];
+  for (const ownerLineId of targets) {
+    const response = await fetch("https://api.line.me/v2/bot/message/push", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${lineAccessToken(env)}`
+      },
+      body: JSON.stringify({
+        to: ownerLineId,
+        messages: [text(`測試通知：老闆 LINE 綁定成功\n時間：${formatTaipeiTime(new Date())}`)]
+      })
+    });
+    const body = await response.text();
+    results.push({
+      owner: maskLineId(ownerLineId),
+      ok: response.ok,
+      status: response.status,
+      body: body.slice(0, 300)
+    });
+  }
+
+  const allOk = results.every((result) => result.ok);
+  await setLastNotifyStatus(env, {
+    ok: allOk,
+    status: allOk ? 200 : results.find((result) => !result.ok)?.status || 0,
+    message: results.map((result) => `${result.owner} ${result.status}${result.body ? ` ${result.body}` : ""}`).join(" | ").slice(0, 300)
+  });
+
+  return Response.json({ ok: allOk, results }, {
+    headers: { "cache-control": "no-store" }
+  });
+}
+
+async function adminNotifyStatus(url, env) {
+  if (!isAdminRequest(url, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+  }
+
+  let notify = null;
+  try {
+    notify = JSON.parse((await env.STEEL_BOT_KV.get("notify:last")) || "null");
+  } catch (_) {
+    notify = { ok: false, message: "notify:last parse failed" };
+  }
+
+  return Response.json({
+    ok: true,
+    owners: (await ownerLineIds(env)).map(maskLineId),
+    notify
+  }, {
+    headers: { "cache-control": "no-store" }
+  });
+}
+
+function isAdminRequest(url, env) {
+  const expectedCode = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
+  const code = String(url.searchParams.get("code") || "").trim();
+  return Boolean(expectedCode) && code === expectedCode;
 }
 
 async function ownerLineIds(env) {
