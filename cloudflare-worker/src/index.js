@@ -507,15 +507,14 @@ function isValidContactInfo(message) {
     && !["先生", "小姐", "姓名", "名字", "客戶", "customer"].includes(cleanName);
 
   const taiwanPhone = digits.startsWith("8869") ? `0${digits.slice(3)}` : digits;
-  const hasPhone = /^09\d{8}$/.test(taiwanPhone)
-    || /^0(?:2\d{8}|[3-8]\d{7,8})$/.test(taiwanPhone);
+  const hasPhone = taiwanPhone.length >= 7;
   return hasName && hasPhone;
 }
 
 function invalidContactPrompt() {
   return [
     "請留下姓名及電話，才能通知專人服務。",
-    "可以使用測試姓名，但電話需為有效手機或市話。",
+    "可以使用測試姓名，但電話需至少 7 位數。",
     "範例：王先生 / 0912-345-678"
   ].join("\n");
 }
