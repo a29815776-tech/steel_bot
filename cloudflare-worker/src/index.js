@@ -169,8 +169,12 @@ async function handleEvent(event, env, origin, ctx) {
       address: msg
     };
     await setState(env, uid, { post_quote: true, contact: state.contact || "" });
-    await reply(env, event.replyToken, [text("收到！我們會儘快安排專人與您聯繫確認勘場時間 😊")]);
-    await notifyLeadSafely(env, lead);
+    const notified = await notifyLeadSafely(env, lead);
+    await reply(env, event.replyToken, [
+      text(notified
+        ? "收到！我們會儘快安排專人與您聯繫確認勘場時間 😊"
+        : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。")
+    ]);
     return;
   }
 
@@ -201,13 +205,15 @@ async function handleEvent(event, env, origin, ctx) {
       total: quoteTotal(state.service, state.material, state.ping)
     };
     await setState(env, uid, { ...quoteState, post_quote: true, contact: msg });
+    const notified = await notifyLeadSafely(env, lead);
     await reply(env, event.replyToken, [
-      buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
+      buttons(notified
+        ? "收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊"
+        : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
         { type: "message", label: "預約勘場", text: "預約勘場" },
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
       ], ["繼續估價"])
     ]);
-    await notifyLeadSafely(env, lead);
     return;
   }
 
@@ -220,13 +226,15 @@ async function handleEvent(event, env, origin, ctx) {
       imageSaved: Boolean(state.imageUrl)
     };
     await setState(env, uid, { post_quote: true, contact: msg });
+    const notified = await notifyLeadSafely(env, lead);
     await reply(env, event.replyToken, [
-      buttons("收到！已將資料通知專人，我們會儘快與您聯繫 😊", [
+      buttons(notified
+        ? "收到！已將資料通知專人，我們會儘快與您聯繫 😊"
+        : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
         { type: "message", label: "預約勘場", text: "預約勘場" },
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
       ], ["繼續估價"])
     ]);
-    await notifyLeadSafely(env, lead);
     return;
   }
 
@@ -704,7 +712,7 @@ function extractLineUserId(message) {
 
 async function notifyLeadSafely(env, lead) {
   try {
-    await notifyLead(env, lead);
+    return await notifyLead(env, lead);
   } catch (error) {
     await setLastNotifyStatus(env, {
       ok: false,
@@ -712,13 +720,14 @@ async function notifyLeadSafely(env, lead) {
       message: `通知例外：${error?.message || error}`
     });
     console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
+    return false;
   }
 }
 
 async function notifyLead(env, lead) {
   const savedLead = await recordLead(env, lead);
   if (savedLead.type === "照片詢問" && savedLead.imageUrl) {
-    await pushOwnerMessages(env, [
+    return await pushOwnerMessages(env, [
       text(ownerLeadMessage(savedLead)),
       {
         type: "image",
@@ -726,9 +735,8 @@ async function notifyLead(env, lead) {
         previewImageUrl: savedLead.imageUrl
       }
     ]);
-    return;
   }
-  await pushOwner(env, ownerLeadMessage(savedLead));
+  return await pushOwner(env, ownerLeadMessage(savedLead));
 }
 
 async function recordLead(env, lead) {
