@@ -496,7 +496,7 @@ function normalizeText(message) {
 function isValidContactInfo(message) {
   const value = String(message || "").trim();
   const normalized = normalizeText(value).toLowerCase();
-  if (/(測試|test|假的|隨便|亂填|無|沒有|none|null|xxx)/i.test(normalized)) return false;
+  if (/(假的|隨便|亂填|無|沒有|none|null|xxx)/i.test(normalized)) return false;
 
   const digits = value.replace(/\D/g, "");
   const namePart = value
