@@ -518,11 +518,19 @@ function isHumanHelpIntent(message) {
 }
 
 function extractPing(message) {
-  const match = String(message || "").match(/(\d{1,3})(?:坪|p|P)/);
+  const value = String(message || "");
+  if (isPingRangeText(value)) return null;
+
+  const match = value.match(/(\d{1,3})(?:坪|p|P)/);
   if (!match) return null;
   const ping = Number(match[1]);
   if (!Number.isFinite(ping) || ping <= 0 || ping > 300) return null;
   return ping;
+}
+
+function isPingRangeText(message) {
+  const value = normalizeText(message);
+  return PING_OPTIONS.includes(value) || /^\d{1,3}坪(內|以上)$/.test(value);
 }
 
 function pingRangeFor(ping) {
