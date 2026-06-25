@@ -495,14 +495,20 @@ function normalizeText(message) {
 
 function isValidContactInfo(message) {
   const value = String(message || "").trim();
+  const normalized = normalizeText(value).toLowerCase();
+  if (/(測試|test|假的|隨便|亂填|無|沒有|none|null|xxx)/i.test(normalized)) return false;
+
   const digits = value.replace(/\D/g, "");
   const namePart = value
     .replace(/[0-9０-９\s/@_\-+()（）.。,:：;；，、]/g, "")
     .trim();
-  const hasName = /[\u4e00-\u9fffA-Za-z]{2,}/.test(namePart);
-  const hasPhone = /(?:\+?886[-\s]?)?0?9\d{8}/.test(digits)
-    || /0\d{7,9}/.test(digits)
-    || digits.length >= 8;
+  const cleanName = namePart.toLowerCase();
+  const hasName = /[\u4e00-\u9fffA-Za-z]{2,}/.test(namePart)
+    && !["先生", "小姐", "姓名", "名字", "客戶", "customer"].includes(cleanName);
+
+  const taiwanPhone = digits.startsWith("8869") ? `0${digits.slice(3)}` : digits;
+  const hasPhone = /^09\d{8}$/.test(taiwanPhone)
+    || /^0(?:2\d{8}|[3-8]\d{7,8})$/.test(taiwanPhone);
   return hasName && hasPhone;
 }
 
