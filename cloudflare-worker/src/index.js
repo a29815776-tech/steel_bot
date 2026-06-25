@@ -141,10 +141,8 @@ async function handleEvent(event, env, origin, ctx) {
     return;
   }
 
-  if (msg === "預約勘場") {
-    state = { waiting_address: true, contact: state.contact || "" };
-    await setState(env, uid, state);
-    await reply(env, event.replyToken, [text("請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）")]);
+  if (isScheduleIntent(msg)) {
+    await askAddress(env, uid, event.replyToken, state);
     return;
   }
 
@@ -162,6 +160,22 @@ async function handleEvent(event, env, origin, ctx) {
   }
 
   if (state.waiting_contact) {
+    const quoteState = {
+      service: state.service,
+      material: state.material,
+      ping_range: state.ping_range,
+      ping: state.ping,
+      lastQuote: {
+        service: state.service,
+        material: state.material,
+        ping_range: state.ping_range,
+        ping: state.ping
+      }
+    };
+
+    const changeHandled = await handleChangeIntent(env, uid, event.replyToken, msg, quoteState);
+    if (changeHandled) return;
+
     const lead = {
       type: "估價詢問",
       userId: uid,
@@ -171,7 +185,7 @@ async function handleEvent(event, env, origin, ctx) {
       ping: state.ping,
       total: quoteTotal(state.service, state.material, state.ping)
     };
-    await setState(env, uid, { post_quote: true, contact: msg });
+    await setState(env, uid, { ...quoteState, post_quote: true, contact: msg });
     await reply(env, event.replyToken, [
       buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
         { type: "message", label: "預約勘場", text: "預約勘場" },
@@ -201,7 +215,17 @@ async function handleEvent(event, env, origin, ctx) {
     return;
   }
 
+  const changeHandled = await handleChangeIntent(env, uid, event.replyToken, msg, state);
+  if (changeHandled) return;
+
   if (state.post_quote) {
+    if (isHumanHelpIntent(msg)) {
+      await reply(env, event.replyToken, [buttons("可以，請點下方按鈕由專人為您服務 😊", [
+        { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
+      ], ["繼續估價", "預約勘場"])]);
+      return;
+    }
+
     await reply(env, event.replyToken, [
       buttons("需要繼續估價、預約勘場，或由專人服務嗎？", [
         { type: "message", label: "繼續估價", text: "繼續估價" },
@@ -360,10 +384,84 @@ async function startQuote(env, uid, replyToken) {
   ]);
 }
 
-function isStartQuoteIntent(message) {
-  const normalized = String(message || "")
+async function askAddress(env, uid, replyToken, state = {}) {
+  await setState(env, uid, {
+    ...state,
+    waiting_address: true,
+    post_quote: false,
+    waiting_contact: false,
+    contact: state.contact || ""
+  });
+  await reply(env, replyToken, [text("請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）")]);
+}
+
+async function handleChangeIntent(env, uid, replyToken, message, state) {
+  const normalized = normalizeText(message);
+  if (!normalized) return false;
+  const quoteState = state.lastQuote ? { ...state.lastQuote, contact: state.contact || "" } : { ...state };
+
+  const directPing = extractPing(normalized);
+  if (directPing && quoteState.service && quoteState.material) {
+    quoteState.ping = directPing;
+    quoteState.ping_range = pingRangeFor(directPing);
+    const quote = formatQuote(quoteState.service, quoteState.material, directPing);
+    await setState(env, uid, {
+      ...quoteState,
+      waiting_contact: true,
+      post_quote: false,
+      lastQuote: {
+        service: quoteState.service,
+        material: quoteState.material,
+        ping_range: quoteState.ping_range,
+        ping: quoteState.ping
+      }
+    });
+    await reply(env, replyToken, [text(`${quote}\n\n${CONTACT_PROMPT}`)]);
+    return true;
+  }
+
+  if (isChangePingIntent(normalized) && quoteState.service && quoteState.material) {
+    delete quoteState.ping;
+    delete quoteState.ping_range;
+    quoteState.waiting_contact = false;
+    quoteState.post_quote = false;
+    await setState(env, uid, quoteState);
+    await reply(env, replyToken, [quick("可以，請重新選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
+    return true;
+  }
+
+  if (isChangeMaterialIntent(normalized) && quoteState.service) {
+    delete quoteState.material;
+    delete quoteState.ping;
+    delete quoteState.ping_range;
+    quoteState.waiting_contact = false;
+    quoteState.post_quote = false;
+    await setState(env, uid, quoteState);
+    await reply(env, replyToken, [
+      textWithQuick("可以，請重新選擇材質：", ["上一步 ↩"]),
+      materialCarousel(quoteState.service)
+    ]);
+    return true;
+  }
+
+  if (isChangeServiceIntent(normalized)) {
+    await setState(env, uid, {});
+    await reply(env, replyToken, [quick("可以，請重新選擇施工項目：", ["天花板", "輕隔間"])]);
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeText(message) {
+  return String(message || "")
     .trim()
-    .replace(/\s+/g, "");
+    .replace(/\s+/g, "")
+    .replace(/得/g, "的");
+}
+
+function isStartQuoteIntent(message) {
+  const normalized = normalizeText(message);
   if (!normalized) return false;
 
   const exact = new Set([
@@ -385,6 +483,53 @@ function isStartQuoteIntent(message) {
 
   return /(繼續|重新|重來|再|另|新).*(估價|報價)/.test(normalized)
     || /(估價|報價).*(繼續|重新|重來|再|另|新)/.test(normalized);
+}
+
+function isChangePingIntent(message) {
+  if (hasAny(message, ["改", "換", "重選", "重新", "調整"]) && hasAny(message, ["坪", "坪數", "大小", "面積"])) return true;
+  return /(改|換|重選|重新|調整|剛才|剛剛|剛|錯|不是).*(坪|坪數|大小|面積)/.test(message)
+    || /(坪|坪數|大小|面積).*(改|換|重選|重新|調整|剛才|剛剛|剛|錯|不是)/.test(message);
+}
+
+function isChangeMaterialIntent(message) {
+  if (hasAny(message, ["改", "換", "重選", "重新", "調整"]) && hasAny(message, ["材質", "材料", "板材", "石膏", "矽酸", "塑膠", "水泥", "鋁板"])) return true;
+  return /(改|換|重選|重新|調整|錯|不是).*(材質|材料|板材|石膏|矽酸|塑膠|水泥|鋁板)/.test(message)
+    || /(材質|材料|板材|石膏|矽酸|塑膠|水泥|鋁板).*(改|換|重選|重新|調整|錯|不是)/.test(message);
+}
+
+function isChangeServiceIntent(message) {
+  if (hasAny(message, ["改", "換", "重選", "重新", "調整"]) && hasAny(message, ["項目", "種類", "服務", "天花板", "輕隔間"])) return true;
+  return /(改|換|重選|重新|調整|錯|不是).*(項目|種類|服務|天花板|輕隔間)/.test(message)
+    || /(項目|種類|服務|天花板|輕隔間).*(改|換|重選|重新|調整|錯|不是)/.test(message);
+}
+
+function hasAny(message, words) {
+  return words.some((word) => message.includes(word));
+}
+
+function isScheduleIntent(message) {
+  const normalized = normalizeText(message);
+  return /(預約|勘場|丈量|現場|估現場|來看|約時間)/.test(normalized);
+}
+
+function isHumanHelpIntent(message) {
+  const normalized = normalizeText(message);
+  return /(專人|真人|人工|老闆|客服|電話|聯絡|聯繫|找人)/.test(normalized);
+}
+
+function extractPing(message) {
+  const match = String(message || "").match(/(\d{1,3})(?:坪|p|P)/);
+  if (!match) return null;
+  const ping = Number(match[1]);
+  if (!Number.isFinite(ping) || ping <= 0 || ping > 300) return null;
+  return ping;
+}
+
+function pingRangeFor(ping) {
+  if (ping < 10) return "10坪內";
+  if (ping < 20) return "20坪內";
+  if (ping < 30) return "30坪內";
+  return "30坪以上";
 }
 
 function isOwner(env, uid) {
