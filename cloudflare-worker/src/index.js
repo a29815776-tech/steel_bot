@@ -139,6 +139,16 @@ async function handleEvent(event, env, origin, ctx) {
     return;
   }
 
+  if (state.waiting_contact) {
+    await handleQuoteContact(env, uid, event.replyToken, msg, state);
+    return;
+  }
+
+  if (state.waiting_photo_contact || state.waiting_video_contact) {
+    await handleMediaContact(env, uid, event.replyToken, msg, state);
+    return;
+  }
+
   if (msg === "我的id") {
     await reply(env, event.replyToken, [text(`您的 ID：${uid}`)]);
     return;
@@ -174,76 +184,6 @@ async function handleEvent(event, env, origin, ctx) {
       text(notified
         ? "收到！我們會儘快安排專人與您聯繫確認勘場時間 😊"
         : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。")
-    ]);
-    return;
-  }
-
-  if (state.waiting_contact) {
-    if (!isValidContactInfo(msg)) {
-      await reply(env, event.replyToken, [text(invalidContactPrompt())]);
-      return;
-    }
-
-    const quoteState = {
-      service: state.service,
-      material: state.material,
-      ping_range: state.ping_range,
-      ping: state.ping,
-      lastQuote: {
-        service: state.service,
-        material: state.material,
-        ping_range: state.ping_range,
-        ping: state.ping
-      }
-    };
-
-    const changeHandled = await handleChangeIntent(env, uid, event.replyToken, msg, quoteState);
-    if (changeHandled) return;
-
-    const lead = {
-      type: "估價詢問",
-      userId: uid,
-      contact: msg,
-      service: state.service,
-      material: state.material,
-      ping: state.ping,
-      total: quoteTotal(state.service, state.material, state.ping)
-    };
-    await setState(env, uid, { ...quoteState, post_quote: true, contact: msg });
-    const notified = await notifyLeadSafely(env, lead);
-    await reply(env, event.replyToken, [
-      buttons(notified
-        ? "收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊"
-        : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
-        { type: "message", label: "預約勘場", text: "預約勘場" },
-        { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
-      ], ["繼續估價"])
-    ]);
-    return;
-  }
-
-  if (state.waiting_photo_contact || state.waiting_video_contact) {
-    if (!isValidContactInfo(msg)) {
-      await reply(env, event.replyToken, [text(invalidContactPrompt())]);
-      return;
-    }
-
-    const lead = {
-      type: state.waiting_photo_contact ? "照片詢問" : "影片詢問",
-      userId: uid,
-      contact: msg,
-      imageUrl: state.imageUrl || "",
-      imageSaved: Boolean(state.imageUrl)
-    };
-    await setState(env, uid, { post_quote: true, contact: msg });
-    const notified = await notifyLeadSafely(env, lead);
-    await reply(env, event.replyToken, [
-      buttons(notified
-        ? "收到！已將資料通知專人，我們會儘快與您聯繫 😊"
-        : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
-        { type: "message", label: "預約勘場", text: "預約勘場" },
-        { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
-      ], ["繼續估價"])
     ]);
     return;
   }
@@ -324,6 +264,76 @@ async function handleEvent(event, env, origin, ctx) {
       await reply(env, event.replyToken, [quick("請選擇實際坪數：", [...options, "上一步 ↩"])]);
     }
   }
+}
+
+async function handleQuoteContact(env, uid, replyToken, msg, state) {
+  if (!isValidContactInfo(msg)) {
+    await reply(env, replyToken, [text(invalidContactPrompt())]);
+    return;
+  }
+
+  const quoteState = {
+    service: state.service,
+    material: state.material,
+    ping_range: state.ping_range,
+    ping: state.ping,
+    lastQuote: {
+      service: state.service,
+      material: state.material,
+      ping_range: state.ping_range,
+      ping: state.ping
+    }
+  };
+
+  const lead = {
+    type: "估價詢問",
+    userId: uid,
+    contact: msg,
+    service: state.service,
+    material: state.material,
+    ping: state.ping,
+    total: quoteTotal(state.service, state.material, state.ping)
+  };
+  await setState(env, uid, { ...quoteState, post_quote: true, waiting_contact: false, contact: msg });
+  const notified = await notifyLeadSafely(env, lead);
+  await reply(env, replyToken, [
+    buttons(notified
+      ? "收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊"
+      : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
+      { type: "message", label: "預約勘場", text: "預約勘場" },
+      { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
+    ], ["繼續估價"])
+  ]);
+}
+
+async function handleMediaContact(env, uid, replyToken, msg, state) {
+  if (!isValidContactInfo(msg)) {
+    await reply(env, replyToken, [text(invalidContactPrompt())]);
+    return;
+  }
+
+  const lead = {
+    type: state.waiting_photo_contact ? "照片詢問" : "影片詢問",
+    userId: uid,
+    contact: msg,
+    imageUrl: state.imageUrl || "",
+    imageSaved: Boolean(state.imageUrl)
+  };
+  await setState(env, uid, {
+    post_quote: true,
+    waiting_photo_contact: false,
+    waiting_video_contact: false,
+    contact: msg
+  });
+  const notified = await notifyLeadSafely(env, lead);
+  await reply(env, replyToken, [
+    buttons(notified
+      ? "收到！已將照片與聯絡資料通知專人，我們會儘快與您聯繫 😊"
+      : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
+      { type: "message", label: "預約勘場", text: "預約勘場" },
+      { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
+    ], ["繼續估價"])
+  ]);
 }
 
 async function goBack(env, uid, replyToken, state) {
