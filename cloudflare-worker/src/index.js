@@ -25,6 +25,7 @@ const PING_SUB_OPTIONS = {
 const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）";
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
+const OWNER_BIND_CODE_FALLBACK = "0973687898";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -114,12 +115,17 @@ async function handleEvent(event, env, origin, ctx) {
   const msg = event.message.text.trim();
   let state = await getState(env, uid);
 
-  if (isOwner(env, uid) && OWNER_COMMANDS.includes(msg)) {
+  if (isOwnerBindIntent(msg)) {
+    await bindOwner(env, uid, event.replyToken, msg);
+    return;
+  }
+
+  if ((await isOwner(env, uid)) && OWNER_COMMANDS.includes(msg)) {
     await reply(env, event.replyToken, [text(await formatRecentLeads(env))]);
     return;
   }
 
-  if (isOwner(env, uid) && NOTIFY_STATUS_COMMANDS.includes(msg)) {
+  if ((await isOwner(env, uid)) && NOTIFY_STATUS_COMMANDS.includes(msg)) {
     await reply(env, event.replyToken, [text(await formatLastNotifyStatus(env))]);
     return;
   }
@@ -155,7 +161,7 @@ async function handleEvent(event, env, origin, ctx) {
     };
     await setState(env, uid, { post_quote: true, contact: state.contact || "" });
     await reply(env, event.replyToken, [text("收到！我們會儘快安排專人與您聯繫確認勘場時間 😊")]);
-    notifyLeadInBackground(ctx, env, lead);
+    await notifyLeadSafely(env, lead);
     return;
   }
 
@@ -192,7 +198,7 @@ async function handleEvent(event, env, origin, ctx) {
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
       ], ["繼續估價"])
     ]);
-    notifyLeadInBackground(ctx, env, lead);
+    await notifyLeadSafely(env, lead);
     return;
   }
 
@@ -211,7 +217,7 @@ async function handleEvent(event, env, origin, ctx) {
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
       ], ["繼續估價"])
     ]);
-    notifyLeadInBackground(ctx, env, lead);
+    await notifyLeadSafely(env, lead);
     return;
   }
 
@@ -540,16 +546,61 @@ function pingRangeFor(ping) {
   return "30坪以上";
 }
 
-function isOwner(env, uid) {
-  return Boolean(env.OWNER_LINE_ID) && uid === String(env.OWNER_LINE_ID).trim();
+async function isOwner(env, uid) {
+  return (await ownerLineIds(env)).includes(uid);
 }
 
-function notifyLeadInBackground(ctx, env, lead) {
-  const task = notifyLead(env, lead).catch((error) => {
-    console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
+function isOwnerBindIntent(message) {
+  const normalized = normalizeText(message);
+  return /^(綁定老闆|設定老闆|我是老闆)/.test(normalized);
+}
+
+async function bindOwner(env, uid, replyToken, message) {
+  const code = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
+  if (!code || !String(message || "").includes(code)) {
+    await reply(env, replyToken, [text(`請輸入：綁定老闆 ${code}`)]);
+    return;
+  }
+
+  const ids = await ownerLineIds(env);
+  if (!ids.includes(uid)) ids.unshift(uid);
+  await env.STEEL_BOT_KV.put("owner:line_ids", JSON.stringify(ids.slice(0, 5)));
+  await setLastNotifyStatus(env, {
+    ok: true,
+    status: 200,
+    message: `已綁定老闆 LINE，目標數量：${ids.length}`
   });
-  if (ctx?.waitUntil) {
-    ctx.waitUntil(task);
+  await reply(env, replyToken, [text(`已綁定這個 LINE 為老闆通知帳號。\nLINE ID：${uid}`)]);
+}
+
+async function ownerLineIds(env) {
+  const ids = [];
+  const envOwner = String(env.OWNER_LINE_ID || "").trim();
+  if (envOwner) ids.push(envOwner);
+
+  try {
+    const bound = JSON.parse((await env.STEEL_BOT_KV.get("owner:line_ids")) || "[]");
+    for (const id of bound) {
+      const cleanId = String(id || "").trim();
+      if (cleanId && !ids.includes(cleanId)) ids.push(cleanId);
+    }
+  } catch (_) {
+    // Ignore malformed owner bindings and keep the environment fallback.
+  }
+
+  return ids;
+}
+
+async function notifyLeadSafely(env, lead) {
+  try {
+    await notifyLead(env, lead);
+  } catch (error) {
+    await setLastNotifyStatus(env, {
+      ok: false,
+      status: 0,
+      message: `通知例外：${error?.message || error}`
+    });
+    console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
   }
 }
 
@@ -707,40 +758,61 @@ async function pushOwner(env, message) {
 }
 
 async function pushOwnerMessages(env, messages) {
-  const ownerLineId = String(env.OWNER_LINE_ID || "").trim();
-  if (!ownerLineId) {
+  const targets = await ownerLineIds(env);
+  if (!targets.length) {
     await setLastNotifyStatus(env, {
       ok: false,
       status: 0,
-      message: "OWNER_LINE_ID 未設定"
+      message: "沒有設定任何老闆 LINE ID"
     });
-    console.log("LINE push skipped: missing OWNER_LINE_ID");
+    console.log("LINE push skipped: no owner LINE IDs");
     return false;
   }
-  const response = await fetch("https://api.line.me/v2/bot/message/push", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${lineAccessToken(env)}`
-    },
-    body: JSON.stringify({ to: ownerLineId, messages })
-  });
-  if (!response.ok) {
+
+  let successCount = 0;
+  let lastStatus = 0;
+  const failures = [];
+
+  for (const ownerLineId of targets) {
+    const response = await fetch("https://api.line.me/v2/bot/message/push", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${lineAccessToken(env)}`
+      },
+      body: JSON.stringify({ to: ownerLineId, messages })
+    });
+    lastStatus = response.status;
+    if (response.ok) {
+      successCount += 1;
+      continue;
+    }
     const body = await response.text();
+    failures.push(`${maskLineId(ownerLineId)}：${response.status} ${body.slice(0, 120)}`);
+    console.log(`LINE push failed to ${maskLineId(ownerLineId)}: ${response.status} ${body}`);
+  }
+
+  if (!successCount) {
     await setLastNotifyStatus(env, {
       ok: false,
-      status: response.status,
-      message: body.slice(0, 300)
+      status: lastStatus,
+      message: failures.join(" | ").slice(0, 300)
     });
-    console.log(`LINE push failed: ${response.status} ${body}`);
     return false;
   }
+
   await setLastNotifyStatus(env, {
     ok: true,
-    status: response.status,
-    message: "已推播到 OWNER_LINE_ID"
+    status: 200,
+    message: `已推播 ${successCount}/${targets.length} 個老闆 LINE${failures.length ? `；部分失敗：${failures.join(" | ").slice(0, 160)}` : ""}`
   });
   return true;
+}
+
+function maskLineId(id) {
+  const value = String(id || "");
+  if (value.length <= 10) return value || "unknown";
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
 async function checkLineToken(env) {
