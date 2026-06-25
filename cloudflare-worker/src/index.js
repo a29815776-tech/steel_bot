@@ -22,6 +22,9 @@ const PING_SUB_OPTIONS = {
   "10坪內": ["1坪", "2坪", "3坪", "4坪", "5坪", "6坪", "7坪", "8坪", "9坪"]
 };
 
+const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）";
+const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
+
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
   "明架石膏": img("明架石膏天花板.jpg"),
@@ -83,19 +86,37 @@ async function handleEvent(event, env, origin) {
 
   if (event.message?.type === "image" || event.message?.type === "video") {
     if (event.message.type === "image") {
-      await forwardImageToOwner(event, env, uid, origin);
+      const media = await storeLineImage(event, env, origin);
+      await setState(env, uid, {
+        waiting_photo_contact: true,
+        mediaId: media?.mediaId || "",
+        imageUrl: media?.imageUrl || "",
+        imageSaved: Boolean(media?.imageUrl),
+        imageReceivedAt: new Date().toISOString()
+      });
+      await reply(env, event.replyToken, [
+        text(`感謝你上傳照片！\n\n${CONTACT_PROMPT}`)
+      ]);
     } else {
-      await pushOwner(env, `🎥 客戶上傳了影片\nLINE ID：${uid}`);
+      await setState(env, uid, {
+        waiting_video_contact: true,
+        videoReceivedAt: new Date().toISOString()
+      });
+      await reply(env, event.replyToken, [
+        text(`感謝你上傳影片！\n\n${CONTACT_PROMPT}`)
+      ]);
     }
-    await reply(env, event.replyToken, [
-      text("感謝你上傳照片！專人服務會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898")
-    ]);
     return;
   }
 
   if (event.message?.type !== "text") return;
   const msg = event.message.text.trim();
   let state = await getState(env, uid);
+
+  if (isOwner(env, uid) && OWNER_COMMANDS.includes(msg)) {
+    await reply(env, event.replyToken, [text(await formatRecentLeads(env))]);
+    return;
+  }
 
   if (msg === "我的id") {
     await reply(env, event.replyToken, [text(`您的 ID：${uid}`)]);
@@ -124,9 +145,68 @@ async function handleEvent(event, env, origin) {
   }
 
   if (state.waiting_address) {
-    await pushOwner(env, `📍 客戶預約勘場\nLINE ID：${uid}\n地址：${msg}`);
+    const lead = await recordLead(env, {
+      type: "預約勘場",
+      userId: uid,
+      contact: "",
+      address: msg
+    });
+    await pushOwner(env, ownerLeadMessage(lead));
     await setState(env, uid, { post_quote: true });
     await reply(env, event.replyToken, [text("收到！我們會儘快安排專人與您聯繫確認勘場時間 😊")]);
+    return;
+  }
+
+  if (state.waiting_contact) {
+    const lead = {
+      type: "估價詢問",
+      userId: uid,
+      contact: msg,
+      service: state.service,
+      material: state.material,
+      ping: state.ping,
+      total: quoteTotal(state.service, state.material, state.ping)
+    };
+    const savedLead = await recordLead(env, lead);
+    await pushOwner(env, ownerLeadMessage(savedLead));
+    await setState(env, uid, { post_quote: true });
+    await reply(env, event.replyToken, [
+      buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
+        { type: "message", label: "預約勘場", text: "預約勘場" },
+        { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
+      ], ["繼續估價請按這裡"])
+    ]);
+    return;
+  }
+
+  if (state.waiting_photo_contact || state.waiting_video_contact) {
+    const lead = {
+      type: state.waiting_photo_contact ? "照片詢問" : "影片詢問",
+      userId: uid,
+      contact: msg,
+      imageUrl: state.imageUrl || "",
+      imageSaved: Boolean(state.imageUrl)
+    };
+    const savedLead = await recordLead(env, lead);
+    if (state.waiting_photo_contact && state.imageUrl) {
+      await pushOwnerMessages(env, [
+        text(ownerLeadMessage(savedLead)),
+        {
+          type: "image",
+          originalContentUrl: state.imageUrl,
+          previewImageUrl: state.imageUrl
+        }
+      ]);
+    } else {
+      await pushOwner(env, ownerLeadMessage(savedLead));
+    }
+    await setState(env, uid, { post_quote: true });
+    await reply(env, event.replyToken, [
+      buttons("收到！已將資料通知專人，我們會儘快與您聯繫 😊", [
+        { type: "message", label: "預約勘場", text: "預約勘場" },
+        { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
+      ], ["繼續估價請按這裡"])
+    ]);
     return;
   }
 
@@ -184,13 +264,9 @@ async function handleEvent(event, env, origin) {
     if (options.includes(msg)) {
       state.ping = Number(msg.replace("坪", ""));
       const quote = formatQuote(state.service, state.material, state.ping);
-      await setState(env, uid, { post_quote: true });
+      await setState(env, uid, { ...state, waiting_contact: true });
       await reply(env, event.replyToken, [
-        text(`${quote}\n\n想獲得更準確價格，可上傳現場照片或預約勘場。`),
-        buttons("需要後續協助嗎？", [
-          { type: "message", label: "預約勘場", text: "預約勘場" },
-          { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
-        ], ["繼續估價請按這裡"])
+        text(`${quote}\n\n${CONTACT_PROMPT}`)
       ]);
     } else {
       await reply(env, event.replyToken, [quick("請選擇實際坪數：", [...options, "上一步 ↩"])]);
@@ -214,9 +290,7 @@ async function goBack(env, uid, replyToken, state) {
 }
 
 function formatQuote(service, material, ping) {
-  const base = MATERIAL_PRICES[`${service}|${material}`] || 0;
-  const rate = ping < 10 ? 1.2 : ping < 20 ? 1.1 : ping < 30 ? 1.05 : 1;
-  const total = Math.round(base * ping * rate);
+  const total = quoteTotal(service, material, ping);
   return [
     "📋 報價結果",
     "─────────────",
@@ -228,6 +302,12 @@ function formatQuote(service, material, ping) {
     "─────────────",
     "以上為預估價，實際費用依現場丈量為準。"
   ].join("\n");
+}
+
+function quoteTotal(service, material, ping) {
+  const base = MATERIAL_PRICES[`${service}|${material}`] || 0;
+  const rate = ping < 10 ? 1.2 : ping < 20 ? 1.1 : ping < 30 ? 1.05 : 1;
+  return Math.round(base * ping * rate);
 }
 
 function materialCarousel(service) {
@@ -276,6 +356,103 @@ function quickReply(options) {
       action: { type: "message", label: option, text: option }
     }))
   };
+}
+
+function isOwner(env, uid) {
+  return Boolean(env.OWNER_LINE_ID) && uid === String(env.OWNER_LINE_ID).trim();
+}
+
+async function recordLead(env, lead) {
+  const createdAt = formatTaipeiTime(new Date());
+  const item = {
+    id: crypto.randomUUID(),
+    createdAt,
+    ...lead
+  };
+
+  await env.STEEL_BOT_KV.put(`lead:${Date.now()}:${item.id}`, JSON.stringify(item), {
+    expirationTtl: 60 * 60 * 24 * 180
+  });
+
+  let recent = [];
+  try {
+    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
+  } catch (_) {
+    recent = [];
+  }
+  recent.unshift(item);
+  await env.STEEL_BOT_KV.put("lead:recent", JSON.stringify(recent.slice(0, 20)), {
+    expirationTtl: 60 * 60 * 24 * 180
+  });
+
+  return item;
+}
+
+async function formatRecentLeads(env) {
+  let recent = [];
+  try {
+    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
+  } catch (_) {
+    recent = [];
+  }
+  if (!recent.length) {
+    return "目前還沒有詢問單紀錄。";
+  }
+  return [
+    "最近詢問單",
+    "─────────────",
+    ...recent.slice(0, 10).map((lead, index) => `${index + 1}. ${lead.createdAt}\n${leadSummary(lead)}`)
+  ].join("\n\n");
+}
+
+function ownerLeadMessage(lead) {
+  return [
+    `🔔 新${lead.type}`,
+    "─────────────",
+    ...leadSummaryLines(lead),
+    "─────────────",
+    `時間：${lead.createdAt || formatTaipeiTime(new Date())}`
+  ].join("\n");
+}
+
+function leadSummary(lead) {
+  return leadSummaryLines(lead).join("\n");
+}
+
+function leadSummaryLines(lead) {
+  const lines = [
+    `客戶資料：${lead.contact || "未留"}`,
+    `LINE ID：${lead.userId || "未知"}`
+  ];
+  if (lead.service || lead.material || lead.ping) {
+    lines.push(`項目：${lead.service || "未選"}／${lead.material || "未選"}`);
+    lines.push(`坪數：${lead.ping || "未選"}坪`);
+  }
+  if (Number.isFinite(lead.total)) {
+    lines.push(`預估：${lead.total.toLocaleString("zh-TW")} 元`);
+  }
+  if (lead.address) {
+    lines.push(`地址：${lead.address}`);
+  }
+  if (lead.type === "照片詢問") {
+    lines.push(lead.imageSaved ? "照片：已附上" : "照片：暫存失敗，請客戶重傳");
+  }
+  if (lead.type === "影片詢問") {
+    lines.push("影片：LINE 影片無法直接轉傳，請聯絡客戶確認");
+  }
+  return lines;
+}
+
+function formatTaipeiTime(date) {
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
 }
 
 async function reply(env, replyToken, messages) {
@@ -329,14 +506,14 @@ async function checkLineToken(env) {
   }, { status: response.ok ? 200 : 500 });
 }
 
-async function forwardImageToOwner(event, env, uid, origin) {
+async function storeLineImage(event, env, origin) {
   const mediaId = crypto.randomUUID();
   const response = await fetch(`https://api-data.line.me/v2/bot/message/${event.message.id}/content`, {
     headers: { authorization: `Bearer ${lineAccessToken(env)}` }
   });
   if (!response.ok) {
-    await pushOwner(env, `📷 客戶上傳了照片，但圖片下載失敗\nLINE ID：${uid}`);
-    return;
+    console.log(`LINE image fetch failed: ${response.status} ${await response.text()}`);
+    return null;
   }
 
   const contentType = response.headers.get("content-type") || "image/jpeg";
@@ -347,14 +524,7 @@ async function forwardImageToOwner(event, env, uid, origin) {
   });
 
   const imageUrl = `${origin}/media/${mediaId}`;
-  await pushOwnerMessages(env, [
-    text(`📷 客戶上傳了照片\nLINE ID：${uid}`),
-    {
-      type: "image",
-      originalContentUrl: imageUrl,
-      previewImageUrl: imageUrl
-    }
-  ]);
+  return { mediaId, imageUrl };
 }
 
 async function serveMedia(mediaId, env) {
