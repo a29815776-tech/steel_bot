@@ -136,10 +136,8 @@ async function handleEvent(event, env, origin, ctx) {
     return;
   }
 
-  if (["重新", "重來", "再估一個", "繼續估價請按這裡", "開始", "報價", "我要估價"].includes(msg)) {
-    state = {};
-    await setState(env, uid, state);
-    await reply(env, event.replyToken, [quick("請選擇您要的裝修需求：\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898", ["天花板", "輕隔間"])]);
+  if (isStartQuoteIntent(msg)) {
+    await startQuote(env, uid, event.replyToken);
     return;
   }
 
@@ -178,7 +176,7 @@ async function handleEvent(event, env, origin, ctx) {
       buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
         { type: "message", label: "預約勘場", text: "預約勘場" },
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
-      ], ["繼續估價請按這裡"])
+      ], ["繼續估價"])
     ]);
     notifyLeadInBackground(ctx, env, lead);
     return;
@@ -197,16 +195,20 @@ async function handleEvent(event, env, origin, ctx) {
       buttons("收到！已將資料通知專人，我們會儘快與您聯繫 😊", [
         { type: "message", label: "預約勘場", text: "預約勘場" },
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
-      ], ["繼續估價請按這裡"])
+      ], ["繼續估價"])
     ]);
     notifyLeadInBackground(ctx, env, lead);
     return;
   }
 
   if (state.post_quote) {
-    await reply(env, event.replyToken, [buttons("有其他問題嗎？點下方按鈕由專人為您服務 😊", [
-      { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
-    ])]);
+    await reply(env, event.replyToken, [
+      buttons("需要繼續估價、預約勘場，或由專人服務嗎？", [
+        { type: "message", label: "繼續估價", text: "繼續估價" },
+        { type: "message", label: "預約勘場", text: "預約勘場" },
+        { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
+      ])
+    ]);
     return;
   }
 
@@ -349,6 +351,40 @@ function quickReply(options) {
       action: { type: "message", label: option, text: option }
     }))
   };
+}
+
+async function startQuote(env, uid, replyToken) {
+  await setState(env, uid, {});
+  await reply(env, replyToken, [
+    quick("請選擇您要的裝修需求：\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898", ["天花板", "輕隔間"])
+  ]);
+}
+
+function isStartQuoteIntent(message) {
+  const normalized = String(message || "")
+    .trim()
+    .replace(/\s+/g, "");
+  if (!normalized) return false;
+
+  const exact = new Set([
+    "重新",
+    "重來",
+    "開始",
+    "報價",
+    "估價",
+    "我要估價",
+    "我要報價",
+    "繼續估價",
+    "繼續報價",
+    "繼續估價請按這裡",
+    "再估一個",
+    "再估一次",
+    "再報價一次"
+  ]);
+  if (exact.has(normalized)) return true;
+
+  return /(繼續|重新|重來|再|另|新).*(估價|報價)/.test(normalized)
+    || /(估價|報價).*(繼續|重新|重來|再|另|新)/.test(normalized);
 }
 
 function isOwner(env, uid) {
