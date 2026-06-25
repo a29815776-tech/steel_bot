@@ -24,6 +24,7 @@ const PING_SUB_OPTIONS = {
 
 const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）";
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
+const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -43,7 +44,7 @@ function img(name) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
       return new Response("ok", { status: 200 });
@@ -70,7 +71,7 @@ export default {
 
     try {
       for (const event of payload.events) {
-        await handleEvent(event, env, url.origin);
+        await handleEvent(event, env, url.origin, ctx);
       }
     } catch (error) {
       console.log(`event handling error: ${error?.name || "Error"}: ${error?.message || error}`);
@@ -80,7 +81,7 @@ export default {
   }
 };
 
-async function handleEvent(event, env, origin) {
+async function handleEvent(event, env, origin, ctx) {
   if (event.type !== "message" || !event.source?.userId) return;
   const uid = event.source.userId;
 
@@ -118,6 +119,11 @@ async function handleEvent(event, env, origin) {
     return;
   }
 
+  if (isOwner(env, uid) && NOTIFY_STATUS_COMMANDS.includes(msg)) {
+    await reply(env, event.replyToken, [text(await formatLastNotifyStatus(env))]);
+    return;
+  }
+
   if (msg === "我的id") {
     await reply(env, event.replyToken, [text(`您的 ID：${uid}`)]);
     return;
@@ -138,22 +144,22 @@ async function handleEvent(event, env, origin) {
   }
 
   if (msg === "預約勘場") {
-    state = { waiting_address: true };
+    state = { waiting_address: true, contact: state.contact || "" };
     await setState(env, uid, state);
     await reply(env, event.replyToken, [text("請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）")]);
     return;
   }
 
   if (state.waiting_address) {
-    const lead = await recordLead(env, {
+    const lead = {
       type: "預約勘場",
       userId: uid,
-      contact: "",
+      contact: state.contact || "",
       address: msg
-    });
-    await pushOwner(env, ownerLeadMessage(lead));
-    await setState(env, uid, { post_quote: true });
+    };
+    await setState(env, uid, { post_quote: true, contact: state.contact || "" });
     await reply(env, event.replyToken, [text("收到！我們會儘快安排專人與您聯繫確認勘場時間 😊")]);
+    notifyLeadInBackground(ctx, env, lead);
     return;
   }
 
@@ -167,15 +173,14 @@ async function handleEvent(event, env, origin) {
       ping: state.ping,
       total: quoteTotal(state.service, state.material, state.ping)
     };
-    const savedLead = await recordLead(env, lead);
-    await pushOwner(env, ownerLeadMessage(savedLead));
-    await setState(env, uid, { post_quote: true });
+    await setState(env, uid, { post_quote: true, contact: msg });
     await reply(env, event.replyToken, [
       buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
         { type: "message", label: "預約勘場", text: "預約勘場" },
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
       ], ["繼續估價請按這裡"])
     ]);
+    notifyLeadInBackground(ctx, env, lead);
     return;
   }
 
@@ -187,26 +192,14 @@ async function handleEvent(event, env, origin) {
       imageUrl: state.imageUrl || "",
       imageSaved: Boolean(state.imageUrl)
     };
-    const savedLead = await recordLead(env, lead);
-    if (state.waiting_photo_contact && state.imageUrl) {
-      await pushOwnerMessages(env, [
-        text(ownerLeadMessage(savedLead)),
-        {
-          type: "image",
-          originalContentUrl: state.imageUrl,
-          previewImageUrl: state.imageUrl
-        }
-      ]);
-    } else {
-      await pushOwner(env, ownerLeadMessage(savedLead));
-    }
-    await setState(env, uid, { post_quote: true });
+    await setState(env, uid, { post_quote: true, contact: msg });
     await reply(env, event.replyToken, [
       buttons("收到！已將資料通知專人，我們會儘快與您聯繫 😊", [
         { type: "message", label: "預約勘場", text: "預約勘場" },
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
       ], ["繼續估價請按這裡"])
     ]);
+    notifyLeadInBackground(ctx, env, lead);
     return;
   }
 
@@ -362,6 +355,31 @@ function isOwner(env, uid) {
   return Boolean(env.OWNER_LINE_ID) && uid === String(env.OWNER_LINE_ID).trim();
 }
 
+function notifyLeadInBackground(ctx, env, lead) {
+  const task = notifyLead(env, lead).catch((error) => {
+    console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
+  });
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(task);
+  }
+}
+
+async function notifyLead(env, lead) {
+  const savedLead = await recordLead(env, lead);
+  if (savedLead.type === "照片詢問" && savedLead.imageUrl) {
+    await pushOwnerMessages(env, [
+      text(ownerLeadMessage(savedLead)),
+      {
+        type: "image",
+        originalContentUrl: savedLead.imageUrl,
+        previewImageUrl: savedLead.imageUrl
+      }
+    ]);
+    return;
+  }
+  await pushOwner(env, ownerLeadMessage(savedLead));
+}
+
 async function recordLead(env, lead) {
   const createdAt = formatTaipeiTime(new Date());
   const item = {
@@ -403,6 +421,32 @@ async function formatRecentLeads(env) {
     "─────────────",
     ...recent.slice(0, 10).map((lead, index) => `${index + 1}. ${lead.createdAt}\n${leadSummary(lead)}`)
   ].join("\n\n");
+}
+
+async function formatLastNotifyStatus(env) {
+  const raw = await env.STEEL_BOT_KV.get("notify:last");
+  if (!raw) return "目前還沒有通知狀態紀錄。";
+  let status;
+  try {
+    status = JSON.parse(raw);
+  } catch (_) {
+    return "通知狀態紀錄格式異常。";
+  }
+  return [
+    "最近通知狀態",
+    "─────────────",
+    `結果：${status.ok ? "成功" : "失敗"}`,
+    `時間：${status.time || "未知"}`,
+    `狀態碼：${status.status || "無"}`,
+    `說明：${status.message || "無"}`
+  ].join("\n");
+}
+
+async function setLastNotifyStatus(env, status) {
+  await env.STEEL_BOT_KV.put("notify:last", JSON.stringify({
+    time: formatTaipeiTime(new Date()),
+    ...status
+  }), { expirationTtl: 60 * 60 * 24 * 30 });
 }
 
 function ownerLeadMessage(lead) {
@@ -470,23 +514,44 @@ async function reply(env, replyToken, messages) {
 }
 
 async function pushOwner(env, message) {
-  if (!env.OWNER_LINE_ID) return;
-  await pushOwnerMessages(env, [text(message)]);
+  return pushOwnerMessages(env, [text(message)]);
 }
 
 async function pushOwnerMessages(env, messages) {
-  if (!env.OWNER_LINE_ID) return;
+  const ownerLineId = String(env.OWNER_LINE_ID || "").trim();
+  if (!ownerLineId) {
+    await setLastNotifyStatus(env, {
+      ok: false,
+      status: 0,
+      message: "OWNER_LINE_ID 未設定"
+    });
+    console.log("LINE push skipped: missing OWNER_LINE_ID");
+    return false;
+  }
   const response = await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${lineAccessToken(env)}`
     },
-    body: JSON.stringify({ to: env.OWNER_LINE_ID, messages })
+    body: JSON.stringify({ to: ownerLineId, messages })
   });
   if (!response.ok) {
-    console.log(`LINE push failed: ${response.status} ${await response.text()}`);
+    const body = await response.text();
+    await setLastNotifyStatus(env, {
+      ok: false,
+      status: response.status,
+      message: body.slice(0, 300)
+    });
+    console.log(`LINE push failed: ${response.status} ${body}`);
+    return false;
   }
+  await setLastNotifyStatus(env, {
+    ok: true,
+    status: response.status,
+    message: "已推播到 OWNER_LINE_ID"
+  });
+  return true;
 }
 
 async function checkLineToken(env) {
