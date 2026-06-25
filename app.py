@@ -318,6 +318,27 @@ def push_owner_messages(messages):
     return success
 
 
+def test_owner_messages(messages):
+    results = []
+    for owner_id in _owner_ids():
+        try:
+            line_bot_api.push_message(owner_id, messages)
+            results.append({
+                "owner": _mask_line_id(owner_id),
+                "ok": True,
+                "status": 200,
+                "error": ""
+            })
+        except Exception as exc:
+            results.append({
+                "owner": _mask_line_id(owner_id),
+                "ok": False,
+                "status": getattr(exc, "status_code", None),
+                "error": str(exc)
+            })
+    return results
+
+
 def notify_owner(msg):
     return push_owner_messages(TextSendMessage(text=msg))
 
@@ -668,12 +689,13 @@ def admin_test_owner():
     if code != expected:
         return jsonify({"ok": False, "error": "unauthorized"}), 403
 
-    ok = push_owner_messages(TextSendMessage(
+    results = test_owner_messages(TextSendMessage(
         text=f"測試通知：Render 老闆 LINE 推播成功\n時間：測試"
     ))
     return jsonify({
-        "ok": ok,
-        "owners": [_mask_line_id(owner_id) for owner_id in _owner_ids()]
+        "ok": all(result["ok"] for result in results),
+        "owners": [_mask_line_id(owner_id) for owner_id in _owner_ids()],
+        "results": results
     })
 
 @app.route("/demo_chat", methods=["POST"])
