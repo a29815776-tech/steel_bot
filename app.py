@@ -356,7 +356,7 @@ def valid_contact_info(message):
 
 
 def contact_prompt_text():
-    return "請留下姓名及電話，才能通知專人服務。\n可以使用測試姓名，但電話需至少 7 位數。\n範例：王先生 0912345678"
+    return "請留下姓名及電話，才能通知專人服務。\n範例：王先生 0912345678"
 
 
 def notify_photo_owner(contact, img_url=None):

@@ -518,7 +518,6 @@ function isValidContactInfo(message) {
 function invalidContactPrompt() {
   return [
     "請留下姓名及電話，才能通知專人服務。",
-    "可以使用測試姓名，但電話需至少 7 位數。",
     "範例：王先生 0912345678"
   ].join("\n");
 }
