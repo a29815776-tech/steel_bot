@@ -342,6 +342,37 @@ def test_owner_messages(messages):
 def notify_owner(msg):
     return push_owner_messages(TextSendMessage(text=msg))
 
+
+def valid_contact_info(message):
+    value = (message or "").strip()
+    if re.search(r"(假的|隨便|亂填|無|沒有|none|null|xxx)", value, re.I):
+        return False
+    digits = re.sub(r"\D", "", value)
+    name_part = re.sub(r"[0-9０-９\s/@_\-+()（）.。,:：;；，、]", "", value).strip()
+    has_name = bool(re.search(r"[\u4e00-\u9fffA-Za-z]{2,}", name_part)) and name_part.lower() not in [
+        "先生", "小姐", "姓名", "名字", "客戶", "customer"
+    ]
+    return has_name and len(digits) >= 7
+
+
+def contact_prompt_text():
+    return "請留下姓名及電話，才能通知專人服務。\n可以使用測試姓名，但電話需至少 7 位數。\n範例：王先生 0912345678"
+
+
+def notify_photo_owner(contact, img_url=None):
+    lines = [
+        "📷 新照片詢問",
+        "─────────────",
+        f"客戶資料：{contact}",
+    ]
+    if img_url:
+        lines.append(f"照片連結：{img_url}")
+    lines.append("─────────────")
+    ok = push_owner_messages(TextSendMessage(text="\n".join(lines)))
+    if img_url:
+        push_owner_messages(ImageSendMessage(original_content_url=img_url, preview_image_url=img_url))
+    return ok
+
 def _handle_back(uid, event):
     state = line_states.get(uid, {})
 
@@ -438,6 +469,20 @@ def handle_message(event):
         line_states[uid] = {"waiting_address": True, "contact": customer_contacts.get(uid)}
         line_bot_api.reply_message(event.reply_token,
             TextSendMessage(text="請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）"))
+        return
+    elif line_states.get(uid, {}).get("waiting_photo_contact"):
+        if not valid_contact_info(msg):
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=contact_prompt_text()))
+            return
+        customer_contacts[uid] = msg
+        img_url = line_states[uid].get("image_url")
+        notified = notify_photo_owner(msg, img_url)
+        line_states[uid] = {"post_quote": True}
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(
+            text="收到！已將照片與聯絡資料通知專人，我們會儘快與您聯繫 😊"
+            if notified else
+            "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。"
+        ))
         return
     elif line_states.get(uid, {}).get("waiting_address"):
         address = msg
@@ -656,17 +701,10 @@ def handle_media(event):
         img_url = f"{BASE_URL}/img/{img_id}"
         contact = customer_contacts.get(uid)
         if contact:
-            owner_msg = f"📷 客戶上傳了照片\n\n👤 客戶資料：\n{contact}"
+            notify_photo_owner(contact, img_url)
+            reply_text = "感謝你上傳照片！已將照片通知專人，我們會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898"
         else:
-            owner_msg = "📷 客戶上傳了照片\n\n（客戶尚未留下聯絡資料）"
-        push_owner_messages([
-            TextSendMessage(text=owner_msg),
-            ImageSendMessage(original_content_url=img_url, preview_image_url=img_url)
-        ])
-        contact = customer_contacts.get(uid)
-        if contact:
-            reply_text = "感謝你上傳照片！如需預約現場丈量請留詳細地址，專人服務會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898"
-        else:
+            line_states[uid] = {"waiting_photo_contact": True, "image_url": img_url}
             reply_text = "感謝你上傳照片！\n\n請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 0912345678）\n\n更多問題請直接來電：0973-687-898"
     else:
         notify_owner("🎥 客戶上傳了影片")
