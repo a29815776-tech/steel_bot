@@ -383,6 +383,10 @@ function text(message) {
   return { type: "text", text: message };
 }
 
+function image(url) {
+  return { type: "image", originalContentUrl: url, previewImageUrl: url };
+}
+
 function textWithQuick(message, options) {
   return { ...text(message), quickReply: quickReply(options) };
 }
@@ -763,14 +767,18 @@ async function notifyLeadSafely(env, lead) {
 async function notifyLead(env, lead) {
   const savedLead = await recordLead(env, lead);
   if (savedLead.type === "照片詢問" && savedLead.imageUrl) {
-    return await pushOwnerMessages(env, [
-      text(ownerLeadMessage(savedLead)),
-      {
-        type: "image",
-        originalContentUrl: savedLead.imageUrl,
-        previewImageUrl: savedLead.imageUrl
-      }
-    ]);
+    const textSent = await pushOwner(env, ownerLeadMessage(savedLead));
+    if (!textSent) return false;
+
+    const imageSent = await pushOwnerMessages(env, [image(savedLead.imageUrl)]);
+    await setLastNotifyStatus(env, {
+      ok: true,
+      status: imageSent ? 200 : 207,
+      message: imageSent
+        ? "已推播老闆 LINE（含照片與客戶資料）"
+        : "已推播老闆 LINE（客戶資料已送出；照片訊息失敗，請用照片連結查看）"
+    });
+    return true;
   }
   return await pushOwner(env, ownerLeadMessage(savedLead));
 }
@@ -874,6 +882,7 @@ function leadSummaryLines(lead) {
   }
   if (lead.type === "照片詢問") {
     lines.push(lead.imageSaved ? "照片：已附上" : "照片：暫存失敗，請客戶重傳");
+    if (lead.imageUrl) lines.push(`照片連結：${lead.imageUrl}`);
   }
   if (lead.type === "影片詢問") {
     lines.push("影片：LINE 影片無法直接轉傳，請聯絡客戶確認");
