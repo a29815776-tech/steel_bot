@@ -453,7 +453,7 @@ def handle_message(event):
             line_states[uid]["waiting_contact_choice"] = False
             line_states[uid]["waiting_name_phone"] = True
             if msg == "留電話":
-                reply_text = "請留下您的稱呼及電話 😊\n（例如：王先生 / 0912-345-678）"
+                reply_text = "請留下您的稱呼及電話 😊\n（例如：王先生 0912345678）"
             else:
                 reply_text = "請留下您的稱呼及LINE ID 😊\n（例如：王先生 / @wangwang）"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
@@ -466,7 +466,7 @@ def handle_message(event):
         if contact_type == "留電話":
             if len(re.findall(r'[一-鿿]', msg)) < 1 or len(re.findall(r'\d', msg)) < 10:
                 line_bot_api.reply_message(event.reply_token,
-                    TextSendMessage(text="請輸入您的稱呼及電話，例如：王先生 / 0912-345-678"))
+                    TextSendMessage(text="請輸入您的稱呼及電話，例如：王先生 0912345678"))
                 return
         else:
             if len(re.findall(r'[一-鿿]', msg)) < 1 or len(msg) < 5:
@@ -667,7 +667,7 @@ def handle_media(event):
         if contact:
             reply_text = "感謝你上傳照片！如需預約現場丈量請留詳細地址，專人服務會儘快與你聯繫 😊\n更多問題請直接來電：0973-687-898"
         else:
-            reply_text = "感謝你上傳照片！\n\n請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）\n\n更多問題請直接來電：0973-687-898"
+            reply_text = "感謝你上傳照片！\n\n請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 0912345678）\n\n更多問題請直接來電：0973-687-898"
     else:
         notify_owner("🎥 客戶上傳了影片")
         reply_text = "感謝你上傳影片如需預約現場丈量請留詳細地址電話。\n更多問題請直接來電：0973-687-898"

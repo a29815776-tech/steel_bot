@@ -22,7 +22,7 @@ const PING_SUB_OPTIONS = {
   "10坪內": ["1坪", "2坪", "3坪", "4坪", "5坪", "6坪", "7坪", "8坪", "9坪"]
 };
 
-const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 / 0912-345-678）";
+const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 0912345678）";
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 const OWNER_BIND_CODE_FALLBACK = "0973687898";
@@ -515,7 +515,7 @@ function invalidContactPrompt() {
   return [
     "請留下姓名及電話，才能通知專人服務。",
     "可以使用測試姓名，但電話需至少 7 位數。",
-    "範例：王先生 / 0912-345-678"
+    "範例：王先生 0912345678"
   ].join("\n");
 }
 
