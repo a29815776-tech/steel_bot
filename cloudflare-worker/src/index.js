@@ -938,10 +938,23 @@ async function queueLeadNotification(env, lead, ctx) {
   const notifyTask = sendAndMarkLead(env, savedLead);
   if (ctx?.waitUntil) {
     ctx.waitUntil(notifyTask);
+    await waitForNotifyKickoff(notifyTask);
   } else {
     await notifyTask;
   }
   return savedLead;
+}
+
+async function waitForNotifyKickoff(task) {
+  try {
+    await Promise.race([task, sleep(1500)]);
+  } catch (_) {
+    // sendAndMarkLead stores notification failures; customer replies should not be blocked here.
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function sendAndMarkLead(env, lead) {
