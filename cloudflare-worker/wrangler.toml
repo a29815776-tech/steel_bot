@@ -2,6 +2,9 @@ name = "steel-bot-worker"
 main = "src/index.js"
 compatibility_date = "2026-06-14"
 
+[triggers]
+crons = ["* * * * *"]
+
 [observability]
 enabled = true
 head_sampling_rate = 1

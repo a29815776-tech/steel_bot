@@ -26,7 +26,7 @@ const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與�
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 const OWNER_BIND_CODE_FALLBACK = "0973687898";
-const BUILD_ID = "sync-owner-notify-20260626";
+const BUILD_ID = "auto-flush-owner-notify-20260626";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -75,6 +75,9 @@ export default {
     if (request.method === "GET" && url.pathname === "/admin/resend-latest") {
       return adminResendLatest(url, env);
     }
+    if (request.method === "GET" && url.pathname === "/admin/flush-pending") {
+      return adminFlushPending(url, env);
+    }
     if (request.method !== "POST" || url.pathname !== "/callback") {
       return new Response("not found", { status: 404 });
     }
@@ -98,6 +101,10 @@ export default {
       return new Response("event handling error", { status: 500 });
     }
     return new Response("OK", { status: 200 });
+  },
+
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(flushPendingNotifications(env, { limit: 5 }));
   }
 };
 
@@ -859,6 +866,18 @@ async function adminResendLatest(url, env) {
   });
 }
 
+async function adminFlushPending(url, env) {
+  if (!isAdminRequest(url, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+  }
+
+  const limit = Math.max(1, Math.min(10, Number(url.searchParams.get("limit") || "5") || 5));
+  const result = await flushPendingNotifications(env, { limit });
+  return Response.json(result, {
+    headers: { "cache-control": "no-store" }
+  });
+}
+
 function isAdminRequest(url, env) {
   const expectedCode = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
   const code = String(url.searchParams.get("code") || "").trim();
@@ -913,15 +932,27 @@ async function queueLeadNotification(env, lead, ctx) {
   const savedLead = await recordLead(env, {
     ...lead,
     notified: false,
-    notifyStatus: "sending",
-    notifyMessage: "正在推播老闆 LINE"
+    notifyStatus: "queued",
+    notifyMessage: "等待推播老闆 LINE"
   });
-  await sendAndMarkLead(env, savedLead);
+  const notifyTask = sendAndMarkLead(env, savedLead);
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(notifyTask);
+  } else {
+    await notifyTask;
+  }
   return savedLead;
 }
 
 async function sendAndMarkLead(env, lead) {
   try {
+    await updateLeadNotifyResult(env, lead, {
+      ok: false,
+      status: "sending",
+      message: "正在推播老闆 LINE",
+      successCount: 0,
+      targetCount: (await ownerLineIds(env)).length
+    });
     const result = await sendLeadToOwners(env, lead);
     await updateLeadNotifyResult(env, lead, result);
     return result;
@@ -938,6 +969,50 @@ async function sendAndMarkLead(env, lead) {
     console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
     return result;
   }
+}
+
+async function flushPendingNotifications(env, { limit = 5 } = {}) {
+  let recent = [];
+  try {
+    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
+  } catch (_) {
+    recent = [];
+  }
+
+  const pending = [];
+  for (const lead of recent) {
+    if (pending.length >= limit) break;
+    const enriched = await enrichLeadFromKey(env, lead);
+    if (isPendingLeadNotification(enriched)) pending.push(enriched);
+  }
+
+  const results = [];
+  for (const lead of pending) {
+    const result = await sendAndMarkLead(env, lead);
+    results.push({
+      id: lead.id,
+      createdAt: lead.createdAt,
+      contact: lead.contact || "",
+      ok: result.ok,
+      status: result.status,
+      message: result.message
+    });
+  }
+
+  return {
+    ok: true,
+    checked: recent.length,
+    pending: pending.length,
+    results
+  };
+}
+
+function isPendingLeadNotification(lead) {
+  if (!lead?.id || lead.notified === true) return false;
+  const status = lead.notifyStatus;
+  if (status === "queued" || status === "sending" || status === "retrying") return true;
+  if (status === 0 || status === "0") return true;
+  return false;
 }
 
 async function sendLeadToOwners(env, lead) {
@@ -1176,14 +1251,22 @@ async function pushOwnerMessagesDetailed(env, messages) {
   const failures = [];
 
   for (const ownerLineId of targets) {
-    const response = await fetch("https://api.line.me/v2/bot/message/push", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${lineAccessToken(env)}`
-      },
-      body: JSON.stringify({ to: ownerLineId, messages })
-    });
+    let response;
+    try {
+      response = await fetchWithTimeout("https://api.line.me/v2/bot/message/push", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${lineAccessToken(env)}`
+        },
+        body: JSON.stringify({ to: ownerLineId, messages })
+      }, 8000);
+    } catch (error) {
+      lastStatus = 0;
+      failures.push(`${maskLineId(ownerLineId)}：push timeout`);
+      console.log(`LINE push timeout to ${maskLineId(ownerLineId)}: ${error?.message || error}`);
+      continue;
+    }
     lastStatus = response.status;
     if (response.ok) {
       successCount += 1;
@@ -1215,6 +1298,16 @@ async function pushOwnerMessagesDetailed(env, messages) {
   };
   await setLastNotifyStatus(env, result);
   return result;
+}
+
+async function fetchWithTimeout(url, options, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function maskLineId(id) {
