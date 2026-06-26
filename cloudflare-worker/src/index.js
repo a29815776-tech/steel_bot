@@ -26,7 +26,7 @@ const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與�
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 const OWNER_BIND_CODE_FALLBACK = "0973687898";
-const BUILD_ID = "contact-fallback-20260626";
+const BUILD_ID = "notify-audit-20260626";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -71,6 +71,9 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/admin/recent") {
       return adminRecent(url, env);
+    }
+    if (request.method === "GET" && url.pathname === "/admin/resend-latest") {
+      return adminResendLatest(url, env);
     }
     if (request.method !== "POST" || url.pathname !== "/callback") {
       return new Response("not found", { status: 404 });
@@ -797,8 +800,50 @@ async function adminRecent(url, env) {
       total: lead.total || "",
       address: lead.address || "",
       imageSaved: Boolean(lead.imageSaved),
-      hasImageUrl: Boolean(lead.imageUrl)
+      hasImageUrl: Boolean(lead.imageUrl),
+      notified: typeof lead.notified === "boolean" ? lead.notified : null,
+      notifyStatus: lead.notifyStatus || "",
+      notifyMessage: lead.notifyMessage || ""
     }))
+  }, {
+    headers: { "cache-control": "no-store" }
+  });
+}
+
+async function adminResendLatest(url, env) {
+  if (!isAdminRequest(url, env)) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+  }
+
+  let recent = [];
+  try {
+    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
+  } catch (_) {
+    recent = [];
+  }
+
+  const index = Number(url.searchParams.get("index") || "0");
+  const lead = recent[Number.isInteger(index) && index >= 0 ? index : 0];
+  if (!lead) {
+    return Response.json({ ok: false, error: "no recent lead" }, { status: 404 });
+  }
+
+  const result = await sendLeadToOwners(env, lead);
+  await updateLeadNotifyResult(env, lead.id, result);
+  return Response.json({
+    ok: result.ok,
+    lead: {
+      createdAt: lead.createdAt,
+      type: lead.type,
+      contact: lead.contact || "",
+      service: lead.service || "",
+      material: lead.material || "",
+      ping: lead.ping || "",
+      total: lead.total || "",
+      imageSaved: Boolean(lead.imageSaved),
+      hasImageUrl: Boolean(lead.imageUrl)
+    },
+    notify: result
   }, {
     headers: { "cache-control": "no-store" }
   });
@@ -850,32 +895,49 @@ async function notifyLeadSafely(env, lead) {
 
 async function notifyLead(env, lead) {
   const savedLead = await recordLead(env, lead);
-  if (savedLead.type === "照片詢問" && savedLead.imageUrl) {
-    const textSent = await pushOwner(env, ownerLeadMessage(savedLead));
-    if (!textSent) return false;
+  const result = await sendLeadToOwners(env, savedLead);
+  await updateLeadNotifyResult(env, savedLead.id, result);
+  return result.ok;
+}
 
-    const imageSent = await pushOwnerMessages(env, [image(savedLead.imageUrl)]);
-    await setLastNotifyStatus(env, {
-      ok: true,
-      status: imageSent ? 200 : 207,
-      message: imageSent
-        ? "已推播老闆 LINE（含照片與客戶資料）"
-        : "已推播老闆 LINE（客戶資料已送出；照片訊息失敗，請用照片連結查看）"
-    });
-    return true;
-  }
-  return await pushOwner(env, ownerLeadMessage(savedLead));
+async function sendLeadToOwners(env, lead) {
+  const textResult = await pushOwnerMessagesDetailed(env, [text(ownerLeadMessage(lead))]);
+  if (!textResult.ok) return textResult;
+
+  if (!lead.imageUrl) return textResult;
+
+  const imageResult = await pushOwnerMessagesDetailed(env, [image(lead.imageUrl)]);
+  const combined = imageResult.ok
+    ? {
+        ok: true,
+        status: 200,
+        message: `${textResult.message}; image sent`,
+        successCount: textResult.successCount,
+        targetCount: textResult.targetCount
+      }
+    : {
+        ok: true,
+        status: 207,
+        message: `${textResult.message}; image failed: ${imageResult.message}`,
+        successCount: textResult.successCount,
+        targetCount: textResult.targetCount
+      };
+  await setLastNotifyStatus(env, combined);
+  return combined;
 }
 
 async function recordLead(env, lead) {
   const createdAt = formatTaipeiTime(new Date());
+  const id = crypto.randomUUID();
+  const key = `lead:${Date.now()}:${id}`;
   const item = {
-    id: crypto.randomUUID(),
+    id,
+    key,
     createdAt,
     ...lead
   };
 
-  await env.STEEL_BOT_KV.put(`lead:${Date.now()}:${item.id}`, JSON.stringify(item), {
+  await env.STEEL_BOT_KV.put(key, JSON.stringify(item), {
     expirationTtl: 60 * 60 * 24 * 180
   });
 
@@ -891,6 +953,39 @@ async function recordLead(env, lead) {
   });
 
   return item;
+}
+
+async function updateLeadNotifyResult(env, leadId, result) {
+  if (!leadId) return;
+
+  let recent = [];
+  try {
+    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
+  } catch (_) {
+    recent = [];
+  }
+
+  const index = recent.findIndex((lead) => lead.id === leadId);
+  if (index < 0) return;
+
+  const updated = {
+    ...recent[index],
+    notified: Boolean(result.ok),
+    notifyStatus: result.status || 0,
+    notifyMessage: String(result.message || "").slice(0, 300),
+    notifiedAt: formatTaipeiTime(new Date())
+  };
+  recent[index] = updated;
+
+  await env.STEEL_BOT_KV.put("lead:recent", JSON.stringify(recent.slice(0, 20)), {
+    expirationTtl: 60 * 60 * 24 * 180
+  });
+
+  if (updated.key) {
+    await env.STEEL_BOT_KV.put(updated.key, JSON.stringify(updated), {
+      expirationTtl: 60 * 60 * 24 * 180
+    });
+  }
 }
 
 async function formatRecentLeads(env) {
@@ -1005,15 +1100,23 @@ async function pushOwner(env, message) {
 }
 
 async function pushOwnerMessages(env, messages) {
+  const result = await pushOwnerMessagesDetailed(env, messages);
+  return result.ok;
+}
+
+async function pushOwnerMessagesDetailed(env, messages) {
   const targets = await ownerLineIds(env);
   if (!targets.length) {
-    await setLastNotifyStatus(env, {
+    const result = {
       ok: false,
       status: 0,
-      message: "沒有設定任何老闆 LINE ID"
-    });
+      message: "沒有設定任何老闆 LINE ID",
+      successCount: 0,
+      targetCount: 0
+    };
+    await setLastNotifyStatus(env, result);
     console.log("LINE push skipped: no owner LINE IDs");
-    return false;
+    return result;
   }
 
   let successCount = 0;
@@ -1040,20 +1143,26 @@ async function pushOwnerMessages(env, messages) {
   }
 
   if (!successCount) {
-    await setLastNotifyStatus(env, {
+    const result = {
       ok: false,
       status: lastStatus,
-      message: failures.join(" | ").slice(0, 300)
-    });
-    return false;
+      message: failures.join(" | ").slice(0, 300),
+      successCount,
+      targetCount: targets.length
+    };
+    await setLastNotifyStatus(env, result);
+    return result;
   }
 
-  await setLastNotifyStatus(env, {
+  const result = {
     ok: true,
     status: 200,
-    message: `已推播 ${successCount}/${targets.length} 個老闆 LINE${failures.length ? `；部分失敗：${failures.join(" | ").slice(0, 160)}` : ""}`
-  });
-  return true;
+    message: `已推播 ${successCount}/${targets.length} 個老闆 LINE${failures.length ? `；部分失敗：${failures.join(" | ").slice(0, 160)}` : ""}`,
+    successCount,
+    targetCount: targets.length
+  };
+  await setLastNotifyStatus(env, result);
+  return result;
 }
 
 function maskLineId(id) {
