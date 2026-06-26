@@ -26,7 +26,7 @@ const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與�
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 const OWNER_BIND_CODE_FALLBACK = "0973687898";
-const BUILD_ID = "notify-audit-20260626";
+const BUILD_ID = "queued-owner-notify-20260626";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -150,12 +150,12 @@ async function handleEvent(event, env, origin, ctx) {
   }
 
   if (state.waiting_contact) {
-    await handleQuoteContact(env, uid, event.replyToken, msg, state);
+    await handleQuoteContact(env, uid, event.replyToken, msg, state, ctx);
     return;
   }
 
   if (state.waiting_photo_contact || state.waiting_video_contact) {
-    await handleMediaContact(env, uid, event.replyToken, msg, state);
+    await handleMediaContact(env, uid, event.replyToken, msg, state, ctx);
     return;
   }
 
@@ -189,17 +189,15 @@ async function handleEvent(event, env, origin, ctx) {
       address: msg
     };
     await setState(env, uid, { post_quote: true, contact: state.contact || "" });
-    const notified = await notifyLeadSafely(env, lead);
+    await queueLeadNotification(env, lead, ctx);
     await reply(env, event.replyToken, [
-      text(notified
-        ? "收到！我們會儘快安排專人與您聯繫確認勘場時間 😊"
-        : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。")
+      text("收到！我們會儘快安排專人與您聯繫確認勘場時間 😊")
     ]);
     return;
   }
 
   if (!state.post_quote && isValidContactInfo(msg) && hasCompleteQuote(state)) {
-    await handleQuoteContact(env, uid, event.replyToken, msg, { ...state, waiting_contact: true });
+    await handleQuoteContact(env, uid, event.replyToken, msg, { ...state, waiting_contact: true }, ctx);
     return;
   }
 
@@ -208,7 +206,7 @@ async function handleEvent(event, env, origin, ctx) {
       ...state,
       waiting_photo_contact: Boolean(state.imageUrl || state.mediaId || state.imageSaved),
       waiting_video_contact: Boolean(state.videoReceivedAt)
-    });
+    }, ctx);
     return;
   }
 
@@ -290,7 +288,7 @@ async function handleEvent(event, env, origin, ctx) {
   }
 }
 
-async function handleQuoteContact(env, uid, replyToken, msg, state) {
+async function handleQuoteContact(env, uid, replyToken, msg, state, ctx) {
   if (!isValidContactInfo(msg)) {
     await reply(env, replyToken, [text(invalidContactPrompt())]);
     return;
@@ -319,18 +317,16 @@ async function handleQuoteContact(env, uid, replyToken, msg, state) {
     total: quoteTotal(state.service, state.material, state.ping)
   };
   await setState(env, uid, { ...quoteState, post_quote: true, waiting_contact: false, contact: msg });
-  const notified = await notifyLeadSafely(env, lead);
+  await queueLeadNotification(env, lead, ctx);
   await reply(env, replyToken, [
-    buttons(notified
-      ? "收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊"
-      : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
+    buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
       { type: "message", label: "預約勘場", text: "預約勘場" },
       { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
     ], ["繼續估價"])
   ]);
 }
 
-async function handleMediaContact(env, uid, replyToken, msg, state) {
+async function handleMediaContact(env, uid, replyToken, msg, state, ctx) {
   if (!isValidContactInfo(msg)) {
     await reply(env, replyToken, [text(invalidContactPrompt())]);
     return;
@@ -349,11 +345,9 @@ async function handleMediaContact(env, uid, replyToken, msg, state) {
     waiting_video_contact: false,
     contact: msg
   });
-  const notified = await notifyLeadSafely(env, lead);
+  await queueLeadNotification(env, lead, ctx);
   await reply(env, replyToken, [
-    buttons(notified
-      ? "收到！已將照片與聯絡資料通知專人，我們會儘快與您聯繫 😊"
-      : "收到！資料已保存，但通知專人時發生問題，請點專人服務或稍後再試。", [
+    buttons("收到！已將照片與聯絡資料通知專人，我們會儘快與您聯繫 😊", [
       { type: "message", label: "預約勘場", text: "預約勘場" },
       { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
     ], ["繼續估價"])
@@ -787,27 +781,43 @@ async function adminRecent(url, env) {
     recent = [];
   }
 
+  const leads = await Promise.all(recent.slice(0, 10).map(async (lead) => {
+    const enriched = await enrichLeadFromKey(env, lead);
+    return {
+      createdAt: enriched.createdAt,
+      type: enriched.type,
+      contact: enriched.contact || "",
+      service: enriched.service || "",
+      material: enriched.material || "",
+      ping: enriched.ping || "",
+      total: enriched.total || "",
+      address: enriched.address || "",
+      imageSaved: Boolean(enriched.imageSaved),
+      hasImageUrl: Boolean(enriched.imageUrl),
+      notified: typeof enriched.notified === "boolean" ? enriched.notified : null,
+      notifyStatus: enriched.notifyStatus || "",
+      notifyMessage: enriched.notifyMessage || ""
+    };
+  }));
+
   return Response.json({
     ok: true,
     count: recent.length,
-    leads: recent.slice(0, 10).map((lead) => ({
-      createdAt: lead.createdAt,
-      type: lead.type,
-      contact: lead.contact || "",
-      service: lead.service || "",
-      material: lead.material || "",
-      ping: lead.ping || "",
-      total: lead.total || "",
-      address: lead.address || "",
-      imageSaved: Boolean(lead.imageSaved),
-      hasImageUrl: Boolean(lead.imageUrl),
-      notified: typeof lead.notified === "boolean" ? lead.notified : null,
-      notifyStatus: lead.notifyStatus || "",
-      notifyMessage: lead.notifyMessage || ""
-    }))
+    leads
   }, {
     headers: { "cache-control": "no-store" }
   });
+}
+
+async function enrichLeadFromKey(env, lead) {
+  if (!lead?.key || (lead.notifyMessage && lead.notifyStatus !== "queued")) return lead;
+  try {
+    const raw = await env.STEEL_BOT_KV.get(lead.key);
+    if (!raw) return lead;
+    return { ...lead, ...JSON.parse(raw) };
+  } catch (_) {
+    return lead;
+  }
 }
 
 async function adminResendLatest(url, env) {
@@ -829,7 +839,7 @@ async function adminResendLatest(url, env) {
   }
 
   const result = await sendLeadToOwners(env, lead);
-  await updateLeadNotifyResult(env, lead.id, result);
+  await updateLeadNotifyResult(env, lead, result);
   return Response.json({
     ok: result.ok,
     lead: {
@@ -895,9 +905,44 @@ async function notifyLeadSafely(env, lead) {
 
 async function notifyLead(env, lead) {
   const savedLead = await recordLead(env, lead);
-  const result = await sendLeadToOwners(env, savedLead);
-  await updateLeadNotifyResult(env, savedLead.id, result);
+  const result = await sendAndMarkLead(env, savedLead);
   return result.ok;
+}
+
+async function queueLeadNotification(env, lead, ctx) {
+  const savedLead = await recordLead(env, {
+    ...lead,
+    notified: false,
+    notifyStatus: "queued",
+    notifyMessage: "等待推播老闆 LINE"
+  });
+  const task = sendAndMarkLead(env, savedLead);
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(task);
+  } else {
+    await task;
+  }
+  return savedLead;
+}
+
+async function sendAndMarkLead(env, lead) {
+  try {
+    const result = await sendLeadToOwners(env, lead);
+    await updateLeadNotifyResult(env, lead, result);
+    return result;
+  } catch (error) {
+    const result = {
+      ok: false,
+      status: 0,
+      message: `通知例外：${error?.message || error}`,
+      successCount: 0,
+      targetCount: (await ownerLineIds(env)).length
+    };
+    await setLastNotifyStatus(env, result);
+    await updateLeadNotifyResult(env, lead, result);
+    console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
+    return result;
+  }
 }
 
 async function sendLeadToOwners(env, lead) {
@@ -955,8 +1000,16 @@ async function recordLead(env, lead) {
   return item;
 }
 
-async function updateLeadNotifyResult(env, leadId, result) {
+async function updateLeadNotifyResult(env, leadOrId, result) {
+  const leadId = typeof leadOrId === "string" ? leadOrId : leadOrId?.id;
   if (!leadId) return;
+
+  if (typeof leadOrId === "object" && leadOrId.key) {
+    const updatedLead = withNotifyResult(leadOrId, result);
+    await env.STEEL_BOT_KV.put(leadOrId.key, JSON.stringify(updatedLead), {
+      expirationTtl: 60 * 60 * 24 * 180
+    });
+  }
 
   let recent = [];
   try {
@@ -968,13 +1021,7 @@ async function updateLeadNotifyResult(env, leadId, result) {
   const index = recent.findIndex((lead) => lead.id === leadId);
   if (index < 0) return;
 
-  const updated = {
-    ...recent[index],
-    notified: Boolean(result.ok),
-    notifyStatus: result.status || 0,
-    notifyMessage: String(result.message || "").slice(0, 300),
-    notifiedAt: formatTaipeiTime(new Date())
-  };
+  const updated = withNotifyResult(recent[index], result);
   recent[index] = updated;
 
   await env.STEEL_BOT_KV.put("lead:recent", JSON.stringify(recent.slice(0, 20)), {
@@ -986,6 +1033,16 @@ async function updateLeadNotifyResult(env, leadId, result) {
       expirationTtl: 60 * 60 * 24 * 180
     });
   }
+}
+
+function withNotifyResult(lead, result) {
+  return {
+    ...lead,
+    notified: Boolean(result.ok),
+    notifyStatus: result.status || 0,
+    notifyMessage: String(result.message || "").slice(0, 300),
+    notifiedAt: formatTaipeiTime(new Date())
+  };
 }
 
 async function formatRecentLeads(env) {
