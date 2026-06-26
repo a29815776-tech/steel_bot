@@ -26,7 +26,7 @@ const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與�
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 const OWNER_BIND_CODE_FALLBACK = "0973687898";
-const BUILD_ID = "queued-owner-notify-20260626";
+const BUILD_ID = "sync-owner-notify-20260626";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -913,15 +913,10 @@ async function queueLeadNotification(env, lead, ctx) {
   const savedLead = await recordLead(env, {
     ...lead,
     notified: false,
-    notifyStatus: "queued",
-    notifyMessage: "等待推播老闆 LINE"
+    notifyStatus: "sending",
+    notifyMessage: "正在推播老闆 LINE"
   });
-  const task = sendAndMarkLead(env, savedLead);
-  if (ctx?.waitUntil) {
-    ctx.waitUntil(task);
-  } else {
-    await task;
-  }
+  await sendAndMarkLead(env, savedLead);
   return savedLead;
 }
 
