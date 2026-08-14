@@ -26,7 +26,7 @@ const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與�
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
 const OWNER_BIND_CODE_FALLBACK = "0973687898";
-const BUILD_ID = "customer-confirm-owner-notify-20260626";
+const BUILD_ID = "reply-delivery-fallback-20260814";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -122,7 +122,7 @@ async function handleEvent(event, env, origin, ctx) {
         imageSaved: Boolean(media?.imageUrl),
         imageReceivedAt: new Date().toISOString()
       });
-      await reply(env, event.replyToken, [
+      await reply(env, event.replyToken, uid, [
         text(`感謝你上傳照片！\n\n${CONTACT_PROMPT}`)
       ]);
     } else {
@@ -130,7 +130,7 @@ async function handleEvent(event, env, origin, ctx) {
         waiting_video_contact: true,
         videoReceivedAt: new Date().toISOString()
       });
-      await reply(env, event.replyToken, [
+      await reply(env, event.replyToken, uid, [
         text(`感謝你上傳影片！\n\n${CONTACT_PROMPT}`)
       ]);
     }
@@ -147,12 +147,12 @@ async function handleEvent(event, env, origin, ctx) {
   }
 
   if ((await isOwner(env, uid)) && OWNER_COMMANDS.includes(msg)) {
-    await reply(env, event.replyToken, [text(await formatRecentLeads(env))]);
+    await reply(env, event.replyToken, uid, [text(await formatRecentLeads(env))]);
     return;
   }
 
   if ((await isOwner(env, uid)) && NOTIFY_STATUS_COMMANDS.includes(msg)) {
-    await reply(env, event.replyToken, [text(await formatLastNotifyStatus(env))]);
+    await reply(env, event.replyToken, uid, [text(await formatLastNotifyStatus(env))]);
     return;
   }
 
@@ -167,14 +167,14 @@ async function handleEvent(event, env, origin, ctx) {
   }
 
   if (msg === "我的id") {
-    await reply(env, event.replyToken, [text(`您的 ID：${uid}`)]);
+    await reply(env, event.replyToken, uid, [text(`您的 ID：${uid}`)]);
     return;
   }
 
   if (["你好", "哈囉", "哈啰", "嗨", "hi", "hello"].includes(msg.toLowerCase())) {
     state = {};
     await setState(env, uid, state);
-    await reply(env, event.replyToken, [quick("歡迎來到百工宅修！👋\n請選擇您要的裝修需求：", ["天花板", "輕隔間"])]);
+    await reply(env, event.replyToken, uid, [quick("歡迎來到百工宅修！👋\n請選擇您要的裝修需求：", ["天花板", "輕隔間"])]);
     return;
   }
 
@@ -195,11 +195,13 @@ async function handleEvent(event, env, origin, ctx) {
       contact: state.contact || "",
       address: msg
     };
-    await setState(env, uid, { post_quote: true, contact: state.contact || "" });
-    await queueLeadNotification(env, lead, ctx);
-    await reply(env, event.replyToken, [
+    // 先把單子寫進 KV，後面不管回覆或推播失敗，勘場需求都不會消失。
+    const savedLead = await recordLeadSafely(env, lead);
+    await reply(env, event.replyToken, uid, [
       text("收到！我們會儘快安排專人與您聯繫確認勘場時間 😊")
     ]);
+    await setState(env, uid, { post_quote: true, contact: state.contact || "" });
+    await scheduleLeadNotify(env, savedLead || pendingLead(lead), ctx);
     return;
   }
 
@@ -222,13 +224,13 @@ async function handleEvent(event, env, origin, ctx) {
 
   if (state.post_quote) {
     if (isHumanHelpIntent(msg)) {
-      await reply(env, event.replyToken, [buttons("可以，請點下方按鈕由專人為您服務 😊", [
+      await reply(env, event.replyToken, uid, [buttons("可以，請點下方按鈕由專人為您服務 😊", [
         { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
       ], ["繼續估價", "預約勘場"])]);
       return;
     }
 
-    await reply(env, event.replyToken, [
+    await reply(env, event.replyToken, uid, [
       buttons("需要繼續估價、預約勘場，或由專人服務嗎？", [
         { type: "message", label: "繼續估價", text: "繼續估價" },
         { type: "message", label: "預約勘場", text: "預約勘場" },
@@ -242,12 +244,12 @@ async function handleEvent(event, env, origin, ctx) {
     if (["天花板", "輕隔間"].includes(msg)) {
       state.service = msg;
       await setState(env, uid, state);
-      await reply(env, event.replyToken, [
+      await reply(env, event.replyToken, uid, [
         textWithQuick("請選擇材質：", ["上一步 ↩"]),
         materialCarousel(msg)
       ]);
     } else {
-      await reply(env, event.replyToken, [quick("歡迎來到百工宅修！👋\n專業天花板・輕隔間工程\n\n點下方按鈕開始估價：", ["我要估價"])]);
+      await reply(env, event.replyToken, uid, [quick("歡迎來到百工宅修！👋\n專業天花板・輕隔間工程\n\n點下方按鈕開始估價：", ["我要估價"])]);
     }
     return;
   }
@@ -262,9 +264,9 @@ async function handleEvent(event, env, origin, ctx) {
     if (materialOptions.includes(msg)) {
       state.material = msg;
       await setState(env, uid, state);
-      await reply(env, event.replyToken, [quick("請選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
+      await reply(env, event.replyToken, uid, [quick("請選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
     } else {
-      await reply(env, event.replyToken, [quick("請選擇材質：", [...materialOptions, "上一步 ↩"])]);
+      await reply(env, event.replyToken, uid, [quick("請選擇材質：", [...materialOptions, "上一步 ↩"])]);
     }
     return;
   }
@@ -273,9 +275,9 @@ async function handleEvent(event, env, origin, ctx) {
     if (PING_OPTIONS.includes(msg)) {
       state.ping_range = msg;
       await setState(env, uid, state);
-      await reply(env, event.replyToken, [quick("請選擇實際坪數：", [...PING_SUB_OPTIONS[msg], "上一步 ↩"])]);
+      await reply(env, event.replyToken, uid, [quick("請選擇實際坪數：", [...PING_SUB_OPTIONS[msg], "上一步 ↩"])]);
     } else {
-      await reply(env, event.replyToken, [quick("請選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
+      await reply(env, event.replyToken, uid, [quick("請選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
     }
     return;
   }
@@ -286,18 +288,18 @@ async function handleEvent(event, env, origin, ctx) {
       state.ping = Number(msg.replace("坪", ""));
       const quote = formatQuote(state.service, state.material, state.ping);
       await setState(env, uid, { ...state, waiting_contact: true });
-      await reply(env, event.replyToken, [
+      await reply(env, event.replyToken, uid, [
         text(`${quote}\n\n${CONTACT_PROMPT}`)
       ]);
     } else {
-      await reply(env, event.replyToken, [quick("請選擇實際坪數：", [...options, "上一步 ↩"])]);
+      await reply(env, event.replyToken, uid, [quick("請選擇實際坪數：", [...options, "上一步 ↩"])]);
     }
   }
 }
 
 async function handleQuoteContact(env, uid, replyToken, msg, state, ctx) {
   if (!isValidContactInfo(msg)) {
-    await reply(env, replyToken, [text(invalidContactPrompt())]);
+    await reply(env, replyToken, uid, [text(invalidContactPrompt())]);
     return;
   }
 
@@ -323,19 +325,30 @@ async function handleQuoteContact(env, uid, replyToken, msg, state, ctx) {
     ping: state.ping,
     total: quoteTotal(state.service, state.material, state.ping)
   };
-  await setState(env, uid, { ...quoteState, post_quote: true, waiting_contact: false, contact: msg });
-  await queueLeadNotification(env, lead, ctx);
-  await reply(env, replyToken, [
+  // 1) 詢問單先落地。這是最不能掉的東西，排在任何送訊息之前。
+  const reuseLead = state.pendingLeadId && state.contact === msg;
+  const savedLead = reuseLead ? null : await recordLeadSafely(env, lead);
+
+  // 2) 再回覆客人。reply token 有效期很短，不要被推播老闆的流程卡住。
+  const delivered = await reply(env, replyToken, uid, [
     buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
       { type: "message", label: "預約勘場", text: "預約勘場" },
       { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
     ], ["繼續估價"])
   ]);
+
+  // 3) 確認訊息送到才把狀態推進；沒送到就停在 waiting_contact，
+  //    客人再送一次聯絡資料仍能收到確認，且不會重複建立詢問單。
+  await setState(env, uid, delivered.ok
+    ? { ...quoteState, post_quote: true, waiting_contact: false, contact: msg }
+    : { ...quoteState, waiting_contact: true, contact: msg, pendingLeadId: savedLead?.id || state.pendingLeadId || "" });
+
+  if (!reuseLead) await scheduleLeadNotify(env, savedLead || pendingLead(lead), ctx);
 }
 
 async function handleMediaContact(env, uid, replyToken, msg, state, ctx) {
   if (!isValidContactInfo(msg)) {
-    await reply(env, replyToken, [text(invalidContactPrompt())]);
+    await reply(env, replyToken, uid, [text(invalidContactPrompt())]);
     return;
   }
 
@@ -346,33 +359,44 @@ async function handleMediaContact(env, uid, replyToken, msg, state, ctx) {
     imageUrl: state.imageUrl || "",
     imageSaved: Boolean(state.imageUrl)
   };
-  await setState(env, uid, {
-    post_quote: true,
-    waiting_photo_contact: false,
-    waiting_video_contact: false,
-    contact: msg
-  });
-  await queueLeadNotification(env, lead, ctx);
-  await reply(env, replyToken, [
+  const reuseLead = state.pendingLeadId && state.contact === msg;
+  const savedLead = reuseLead ? null : await recordLeadSafely(env, lead);
+
+  const delivered = await reply(env, replyToken, uid, [
     buttons("收到！已將照片與聯絡資料通知專人，我們會儘快與您聯繫 😊", [
       { type: "message", label: "預約勘場", text: "預約勘場" },
       { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
     ], ["繼續估價"])
   ]);
+
+  await setState(env, uid, delivered.ok
+    ? {
+        post_quote: true,
+        waiting_photo_contact: false,
+        waiting_video_contact: false,
+        contact: msg
+      }
+    : {
+        ...state,
+        contact: msg,
+        pendingLeadId: savedLead?.id || state.pendingLeadId || ""
+      });
+
+  if (!reuseLead) await scheduleLeadNotify(env, savedLead || pendingLead(lead), ctx);
 }
 
 async function goBack(env, uid, replyToken, state) {
   if (state.ping_range) {
     delete state.ping_range;
     await setState(env, uid, state);
-    await reply(env, replyToken, [quick("請重新選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
+    await reply(env, replyToken, uid, [quick("請重新選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
   } else if (state.material) {
     delete state.material;
     await setState(env, uid, state);
-    await reply(env, replyToken, [materialCarousel(state.service)]);
+    await reply(env, replyToken, uid, [materialCarousel(state.service)]);
   } else {
     await setState(env, uid, {});
-    await reply(env, replyToken, [quick("請選擇施工項目：", ["天花板", "輕隔間"])]);
+    await reply(env, replyToken, uid, [quick("請選擇施工項目：", ["天花板", "輕隔間"])]);
   }
 }
 
@@ -459,7 +483,7 @@ function quickReply(options) {
 
 async function startQuote(env, uid, replyToken) {
   await setState(env, uid, {});
-  await reply(env, replyToken, [
+  await reply(env, replyToken, uid, [
     quick("請選擇您要的裝修需求：\n\n（急件請點這裡）\nhttps://line.me/ti/p/~0973687898", ["天花板", "輕隔間"])
   ]);
 }
@@ -472,7 +496,7 @@ async function askAddress(env, uid, replyToken, state = {}) {
     waiting_contact: false,
     contact: state.contact || ""
   });
-  await reply(env, replyToken, [text("請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）")]);
+  await reply(env, replyToken, uid, [text("請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）")]);
 }
 
 async function handleChangeIntent(env, uid, replyToken, message, state) {
@@ -496,7 +520,7 @@ async function handleChangeIntent(env, uid, replyToken, message, state) {
         ping: quoteState.ping
       }
     });
-    await reply(env, replyToken, [text(`${quote}\n\n${CONTACT_PROMPT}`)]);
+    await reply(env, replyToken, uid, [text(`${quote}\n\n${CONTACT_PROMPT}`)]);
     return true;
   }
 
@@ -506,7 +530,7 @@ async function handleChangeIntent(env, uid, replyToken, message, state) {
     quoteState.waiting_contact = false;
     quoteState.post_quote = false;
     await setState(env, uid, quoteState);
-    await reply(env, replyToken, [quick("可以，請重新選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
+    await reply(env, replyToken, uid, [quick("可以，請重新選擇坪數範圍：", [...PING_OPTIONS, "上一步 ↩"])]);
     return true;
   }
 
@@ -517,7 +541,7 @@ async function handleChangeIntent(env, uid, replyToken, message, state) {
     quoteState.waiting_contact = false;
     quoteState.post_quote = false;
     await setState(env, uid, quoteState);
-    await reply(env, replyToken, [
+    await reply(env, replyToken, uid, [
       textWithQuick("可以，請重新選擇材質：", ["上一步 ↩"]),
       materialCarousel(quoteState.service)
     ]);
@@ -526,7 +550,7 @@ async function handleChangeIntent(env, uid, replyToken, message, state) {
 
   if (isChangeServiceIntent(normalized)) {
     await setState(env, uid, {});
-    await reply(env, replyToken, [quick("可以，請重新選擇施工項目：", ["天花板", "輕隔間"])]);
+    await reply(env, replyToken, uid, [quick("可以，請重新選擇施工項目：", ["天花板", "輕隔間"])]);
     return true;
   }
 
@@ -657,7 +681,7 @@ function isOwnerBindIntent(message) {
 async function bindOwner(env, uid, replyToken, message) {
   const code = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
   if (!code || !String(message || "").includes(code)) {
-    await reply(env, replyToken, [text(`請輸入：綁定老闆 ${code}\n或：綁定老闆ID U開頭的LINE_ID ${code}`)]);
+    await reply(env, replyToken, uid, [text(`請輸入：綁定老闆 ${code}\n或：綁定老闆ID U開頭的LINE_ID ${code}`)]);
     return;
   }
 
@@ -669,7 +693,7 @@ async function bindOwner(env, uid, replyToken, message) {
     status: 200,
     message: `已綁定老闆 LINE：${maskLineId(targetId)}`
   });
-  await reply(env, replyToken, [text("已綁定老闆通知帳號。")]);
+  await reply(env, replyToken, uid, [text("已綁定老闆通知帳號。")]);
 }
 
 async function adminBindOwner(url, env) {
@@ -928,19 +952,39 @@ async function notifyLead(env, lead) {
   return result.ok;
 }
 
-async function queueLeadNotification(env, lead, ctx) {
-  const savedLead = await recordLead(env, {
+function pendingLead(lead) {
+  return {
     ...lead,
     notified: false,
     notifyStatus: "queued",
     notifyMessage: "等待推播老闆 LINE"
-  });
-  const notifyTask = sendAndMarkLead(env, savedLead);
+  };
+}
+
+// KV 寫入失敗不可以連帶把客人的確認訊息一起吃掉：記錄失敗就回 null，
+// 呼叫端仍然會回覆客人，也仍然會直接推播老闆（只是少了這筆稽核紀錄）。
+async function recordLeadSafely(env, lead) {
+  try {
+    return await recordLead(env, pendingLead(lead));
+  } catch (error) {
+    console.log(`lead record failed: ${error?.name || "Error"}: ${error?.message || error}`);
+    return null;
+  }
+}
+
+// 推播老闆放在背景跑，不擋住回覆客人；沒有 ctx 時才同步等待。
+async function scheduleLeadNotify(env, lead, ctx) {
+  const notifyTask = sendAndMarkLead(env, lead);
   if (ctx?.waitUntil) {
     ctx.waitUntil(notifyTask);
-  } else {
-    await notifyTask;
+    return;
   }
+  await notifyTask;
+}
+
+async function queueLeadNotification(env, lead, ctx) {
+  const savedLead = await recordLead(env, pendingLead(lead));
+  await scheduleLeadNotify(env, savedLead, ctx);
   return savedLead;
 }
 
@@ -1208,17 +1252,114 @@ function formatTaipeiTime(date) {
   }).format(date);
 }
 
-async function reply(env, replyToken, messages) {
-  const response = await fetch("https://api.line.me/v2/bot/message/reply", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${lineAccessToken(env)}`
-    },
-    body: JSON.stringify({ replyToken, messages })
-  });
-  if (!response.ok) {
-    console.log(`LINE reply failed: ${response.status} ${await response.text()}`);
+async function reply(env, replyToken, uid, messages) {
+  const result = await sendReply(env, replyToken, messages);
+  if (result.ok) return result;
+
+  const plain = [text(plainTextOf(messages))];
+
+  // 富訊息（範本／快速回覆）被 LINE 退回時，同一個 reply token 仍可送純文字。
+  if (isPayloadRejection(result)) {
+    const plainReply = await sendReply(env, replyToken, plain);
+    if (plainReply.ok) {
+      console.log(`LINE reply degraded to plain text after ${result.status}: ${result.message}`);
+      return { ok: true, status: 200, message: `rich reply rejected (${result.status}), sent as plain text` };
+    }
+  }
+
+  if (!uid) {
+    console.log(`LINE reply failed with no push fallback available: ${result.status} ${result.message}`);
+    return result;
+  }
+
+  // reply token 失效或連線失敗時，push 不需要 token，仍可把訊息送到客人手上。
+  const pushResult = await pushToUser(env, uid, messages);
+  console.log(`LINE reply fallback push to ${maskLineId(uid)}: ok=${pushResult.ok} status=${pushResult.status} ${pushResult.message}`);
+  if (pushResult.ok) {
+    return { ok: true, status: 200, message: `reply failed (${result.status}), delivered via push` };
+  }
+
+  if (isPayloadRejection(pushResult)) {
+    const plainPush = await pushToUser(env, uid, plain);
+    console.log(`LINE plain push to ${maskLineId(uid)}: ok=${plainPush.ok} status=${plainPush.status} ${plainPush.message}`);
+    if (plainPush.ok) {
+      return { ok: true, status: 200, message: `reply and rich push rejected, delivered as plain push` };
+    }
+  }
+
+  console.log(`LINE delivery lost for ${maskLineId(uid)}: reply=${result.status} ${result.message}; push=${pushResult.status} ${pushResult.message}`);
+  return result;
+}
+
+function isPayloadRejection(result) {
+  return result.status >= 400 && result.status < 500 && !/reply token/i.test(result.message || "");
+}
+
+// 把範本／快速回覆訊息降級成純文字，避免因為 payload 被退回就整則訊息消失。
+function plainTextOf(messages) {
+  const parts = [];
+  for (const message of messages || []) {
+    if (message?.type === "text") {
+      parts.push(message.text);
+    } else if (message?.type === "template") {
+      parts.push(message.template?.text || message.altText || "");
+      for (const action of message.template?.actions || []) {
+        if (action?.type === "uri") parts.push(`${action.label}：${action.uri}`);
+      }
+    } else if (message?.type === "image") {
+      parts.push(message.originalContentUrl || "");
+    }
+  }
+  const merged = parts.filter(Boolean).join("\n").slice(0, 4900);
+  return merged || "收到！我們會儘快與您聯繫 😊";
+}
+
+async function sendReply(env, replyToken, messages) {
+  let last = { ok: false, status: 0, message: "reply not attempted" };
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout("https://api.line.me/v2/bot/message/reply", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${lineAccessToken(env)}`
+        },
+        body: JSON.stringify({ replyToken, messages })
+      }, 8000);
+
+      if (response.ok) return { ok: true, status: response.status, message: "" };
+
+      const body = await response.text();
+      last = { ok: false, status: response.status, message: body.slice(0, 300) };
+      console.log(`LINE reply failed (attempt ${attempt}): ${response.status} ${body}`);
+      // A rejected payload or an expired reply token will not improve on a retry.
+      if (response.status < 500) return last;
+    } catch (error) {
+      last = { ok: false, status: 0, message: `reply timeout: ${error?.message || error}` };
+      console.log(`LINE reply error (attempt ${attempt}): ${error?.message || error}`);
+    }
+  }
+
+  return last;
+}
+
+async function pushToUser(env, uid, messages) {
+  try {
+    const response = await fetchWithTimeout("https://api.line.me/v2/bot/message/push", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${lineAccessToken(env)}`
+      },
+      body: JSON.stringify({ to: uid, messages })
+    }, 8000);
+
+    if (response.ok) return { ok: true, status: response.status, message: "" };
+    const body = await response.text();
+    return { ok: false, status: response.status, message: body.slice(0, 300) };
+  } catch (error) {
+    return { ok: false, status: 0, message: `push timeout: ${error?.message || error}` };
   }
 }
 
