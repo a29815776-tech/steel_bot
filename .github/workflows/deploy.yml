@@ -1,1 +1,27 @@
+name: Deploy Worker
 
+# 只要 cloudflare-worker 資料夾底下的檔案有變動並推到 main，
+# 就自動部署到 Cloudflare Workers。也可以在 Actions 分頁手動觸發。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare-worker/**"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Deploy to Cloudflare Workers
+        working-directory: cloudflare-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 deploy
