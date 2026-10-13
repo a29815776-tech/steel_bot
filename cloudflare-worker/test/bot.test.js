@@ -144,6 +144,55 @@ test("fresh appointment collects contact before address and notifies both partie
   } finally { f.restore(); }
 });
 
+test("repeated appointment button is never saved or forwarded as an address", async () => {
+  const f = setup({ state: { post_quote: true, contact: CONTACT } });
+  try {
+    await f.send("預約勘場");
+    await f.send("預約勘場");
+    await f.send("預約勘場");
+    await f.flush();
+    assert.equal(f.data(`state:${CUSTOMER}`).waiting_address, true);
+    assert.equal((await f.leads()).length, 0);
+    assert.equal(f.ownerCalls().length, 0);
+    assert.equal(f.customerCalls().length, 0);
+    assert.ok(f.replyCalls().every(call => /請留下詳細地址/.test(call.body.messages[0].text)));
+    await f.send("台北市大安區和平東路一段12號"); await f.flush();
+    const leads = await f.leads();
+    assert.equal(leads.length, 1);
+    assert.equal(leads[0].address, "台北市大安區和平東路一段12號");
+    assert.equal(f.ownerCalls().length, 1);
+    assert.equal(f.customerCalls().length, 1);
+  } finally { f.restore(); }
+});
+
+test("non-address replies keep appointment pending without creating notifications", async () => {
+  const f = setup({ state: { post_quote: true, contact: CONTACT } });
+  try {
+    await f.send("預約勘場");
+    for (const message of ["好的", "明天", "111", "預約", "台北市大安區", "不知道", "測試地址"]) {
+      await f.send(message); await f.flush();
+      assert.equal(f.data(`state:${CUSTOMER}`).waiting_address, true);
+      assert.equal((await f.leads()).length, 0);
+    }
+    assert.equal(f.ownerCalls().length, 0);
+    assert.equal(f.customerCalls().length, 0);
+    await f.send("新竹縣北埔鄉南埔村十五號"); await f.flush();
+    assert.equal((await f.leads())[0].address, "新竹縣北埔鄉南埔村十五號");
+  } finally { f.restore(); }
+});
+
+test("repeated appointment command before contact continues asking for contact", async () => {
+  const f = setup({ state: {} });
+  try {
+    await f.send("預約勘場"); await f.send("預約勘場"); await f.flush();
+    assert.equal(f.data(`state:${CUSTOMER}`).waiting_appointment_contact, true);
+    assert.equal(f.ownerCalls().length, 0);
+    await f.send(CONTACT); await f.send("和平東路12"); await f.flush();
+    assert.equal((await f.leads())[0].address, "和平東路12");
+    assert.equal((await f.leads())[0].contact, CONTACT);
+  } finally { f.restore(); }
+});
+
 test("concurrent customers and duplicate events preserve exactly one lead per event", async () => {
   const f = setup();
   try {

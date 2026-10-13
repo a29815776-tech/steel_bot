@@ -28,7 +28,7 @@ const PING_SUB_OPTIONS = {
 const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 0912345678）";
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
-const BUILD_ID = "durable-notifications-20261013";
+const BUILD_ID = "appointment-address-guard-20261013";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -236,7 +236,7 @@ async function handleEvent(event, env, origin, ctx) {
     await reply(env, event.replyToken, uid, [buttons("請點下方按鈕聯絡專人。", [{ type: "uri", label: "專人服務", uri: OWNER_LINE_URL }])]);
     return;
   }
-  if (isScheduleIntent(msg) && !state.waiting_address) {
+  if (isScheduleIntent(msg) && (!state.waiting_address || !isValidAppointmentAddress(msg))) {
     await askAddress(env, uid, event.replyToken, state);
     return;
   }
@@ -271,6 +271,14 @@ async function handleEvent(event, env, origin, ctx) {
   }
 
   if (state.waiting_address) {
+    if (!isValidAppointmentAddress(msg)) {
+      await reply(env, event.replyToken, uid, [text("請留下勘場地址，包含路名與門牌號碼。\n（例如：台北市大安區和平東路一段12號）")]);
+      return;
+    }
+    if (!isValidContactInfo(state.contact)) {
+      await askAddress(env, uid, event.replyToken, state);
+      return;
+    }
     const lead = {
       type: "預約勘場",
       userId: uid,
@@ -735,6 +743,15 @@ function hasAny(message, words) {
 function isScheduleIntent(message) {
   const normalized = normalizeText(message);
   return /(預約|勘場|丈量|現場|估現場|來看|約時間)/.test(normalized);
+}
+
+function isValidAppointmentAddress(message) {
+  const value = String(message || "").normalize("NFKC").trim();
+  const hasPlace = /[\u4e00-\u9fff]+(?:縣|市|區|鄉|鎮|村|里|路|街|巷|弄)/.test(value);
+  const hasNumber = /(?:\d+|[零〇一二三四五六七八九十百]+)\s*(?:號|之|樓)/.test(value)
+    || /(?:路|街|巷|弄)[^\n]*\d+/.test(value);
+  const englishAddress = /\d+\s+[A-Za-z][A-Za-z\s.'-]*\b(?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|boulevard|blvd)\b/i.test(value);
+  return value.length >= 4 && ((hasPlace && hasNumber) || englishAddress);
 }
 
 function isHumanHelpIntent(message) {

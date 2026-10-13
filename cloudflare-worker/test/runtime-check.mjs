@@ -39,6 +39,27 @@ try {
   const duplicate = await mf.dispatchFetch("https://local.invalid/callback", { method: "POST", body, headers: { "x-line-signature": createHmac("sha256", "mock-secret").update(body).digest("base64") } });
   assert.equal(duplicate.status, 200);
   assert.equal(sends.filter(send => send.path.endsWith("/push")).length, 2);
+  async function sendText(id, text) {
+    const body = JSON.stringify({ events: [{ type: "message", webhookEventId: id, replyToken: "reply-" + id, source: { userId: user }, message: { type: "text", id, text } }] });
+    const response = await mf.dispatchFetch("https://local.invalid/callback", { method: "POST", body, headers: { "x-line-signature": createHmac("sha256", "mock-secret").update(body).digest("base64") } });
+    assert.equal(response.status, 200);
+  }
+  await sendText("runtime-appointment", "預約勘場");
+  await sendText("runtime-appointment-again", "預約勘場");
+  const beforeAddress = await (await mf.dispatchFetch("https://local.invalid/admin/recent", { headers: { authorization: "Bearer mock-admin" } })).json();
+  assert.equal(beforeAddress.count, 1);
+  assert.equal(sends.filter(send => send.path.endsWith("/push")).length, 2);
+  await sendText("runtime-appointment-address", "台北市大安區和平東路一段12號");
+  for (let i = 0; i < 30; i++) {
+    recent = await (await mf.dispatchFetch("https://local.invalid/admin/recent", { headers: { authorization: "Bearer mock-admin" } })).json();
+    if (recent.leads[0]?.queueStatus === "complete") break;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  assert.equal(recent.count, 2);
+  assert.equal(recent.leads[0].address, "台北市大安區和平東路一段12號");
+  assert.equal(recent.leads[0].queueStatus, "complete");
+  assert.equal(sends.filter(send => send.path.endsWith("/push")).length, 4);
+  console.log("Runtime verified: repeated appointment command creates no lead or owner notification; valid address creates one appointment.");
   console.log("Runtime verified: signed webhook, SQLite storage, automatic alarm, owner push, customer confirmation, and duplicate suppression. External network disabled.");
 } finally {
   await mf.dispose();
