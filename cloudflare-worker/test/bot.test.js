@@ -282,3 +282,15 @@ test("network errors retain queued notification for retry", async () => {
     assert.equal(lead.notifyStatus, 0); assert.equal(f.customerCalls().length, 0);
   } finally { f.restore(); }
 });
+
+test("restart after successful delivery cleans pending marker without resending", async () => {
+  const f = setup();
+  try {
+    await f.send(CONTACT); await f.flush();
+    const lead = (await f.leads())[0];
+    await f.storage.put(`pending:${lead.id}`, { value: lead.key });
+    await f.flush();
+    assert.equal(f.ownerCalls().length, 1);
+    assert.equal(f.storage.data.has(`pending:${lead.id}`), false);
+  } finally { f.restore(); }
+});

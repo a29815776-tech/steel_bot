@@ -60,7 +60,11 @@ export class NotificationQueue {
 
   async deliver(input) {
     const lead = JSON.parse((await this.store.get(input.key)) || JSON.stringify(input));
-    if (lead.queueStatus === "complete") return { ok: true, status: 200, message: "通知已完成", lead };
+    if (lead.queueStatus === "complete") {
+      await this.store.delete(`pending:${lead.id}`);
+      await this.store.delete(`failed:${lead.id}`);
+      return { ok: true, status: 200, message: "通知已完成", lead };
+    }
     if (lead.nextAttemptAt > Date.now()) return { ok: false, status: lead.notifyStatus, message: "等待重試", lead };
     // LINE retains retry keys for 24 hours; do not resend an ambiguous old request.
     if (lead.firstAttemptAt && Date.now() - lead.firstAttemptAt >= 23 * 3600000) {
