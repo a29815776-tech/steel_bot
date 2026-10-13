@@ -1,3 +1,6 @@
+import { DurableStore } from "./durable-store.js";
+import { NotificationQueue, retryKey } from "./notification-queue.js";
+
 const OWNER_LINE_URL = "https://line.me/ti/p/~0973687898";
 
 const MATERIAL_PRICES = {
@@ -25,8 +28,7 @@ const PING_SUB_OPTIONS = {
 const CONTACT_PROMPT = "請留下您的姓名及電話，方便專人服務與您確認丈量時間 😊\n（例如：王先生 0912345678）";
 const OWNER_COMMANDS = ["查詢單", "查詢詢問單", "詢問單", "查紀錄", "最近紀錄"];
 const NOTIFY_STATUS_COMMANDS = ["查通知", "通知狀態"];
-const OWNER_BIND_CODE_FALLBACK = "0973687898";
-const BUILD_ID = "reply-delivery-fallback-20260814";
+const BUILD_ID = "durable-notifications-20261013";
 
 const GH = "https://raw.githubusercontent.com/a29815776-tech/steel-bot/main/";
 const MATERIAL_IMAGES = {
@@ -51,62 +53,116 @@ export default {
     if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/healthz")) {
       return new Response("ok", { status: 200 });
     }
-    if (request.method === "GET" && url.pathname === "/diag/line-token") {
-      return checkLineToken(env);
-    }
     if (request.method === "GET" && url.pathname.startsWith("/media/")) {
       return serveMedia(url.pathname.slice("/media/".length), env);
     }
-    if (request.method === "GET" && url.pathname === "/admin/bind-owner") {
-      return adminBindOwner(url, env);
-    }
-    if (request.method === "GET" && url.pathname === "/admin/test-owner") {
-      return adminTestOwner(url, env);
-    }
-    if (request.method === "GET" && url.pathname === "/admin/notify-status") {
-      return adminNotifyStatus(url, env);
-    }
-    if (request.method === "GET" && url.pathname === "/admin/version") {
-      return adminVersion(url, env);
-    }
-    if (request.method === "GET" && url.pathname === "/admin/recent") {
-      return adminRecent(url, env);
-    }
-    if (request.method === "GET" && url.pathname === "/admin/resend-latest") {
-      return adminResendLatest(url, env);
-    }
-    if (request.method === "GET" && url.pathname === "/admin/flush-pending") {
-      return adminFlushPending(url, env);
-    }
-    if (request.method !== "POST" || url.pathname !== "/callback") {
+    if (url.pathname.startsWith("/admin/") || url.pathname === "/diag/line-token") {
+      const supplied = request.headers.get("authorization") || "";
+      if (!env.ADMIN_TOKEN || !timingSafeEqual(supplied, `Bearer ${env.ADMIN_TOKEN}`)) {
+        return Response.json({ ok: false, error: "unauthorized" }, { status: 403 });
+      }
+      const mutation = ["/admin/bind-owner", "/admin/test-owner", "/admin/resend-latest", "/admin/flush-pending"];
+      if (request.method !== (mutation.includes(url.pathname) ? "POST" : "GET")) {
+        return new Response("method not allowed", { status: 405 });
+      }
+      if (url.pathname === "/diag/line-token") return checkLineToken(env);
+    } else if (request.method === "POST" && url.pathname === "/callback") {
+      if (!env.LINE_CHANNEL_SECRET) return new Response("webhook not configured", { status: 503 });
+      const body = await request.clone().text();
+      if (!(await verifyLineSignature(body, request.headers.get("x-line-signature") || "", env.LINE_CHANNEL_SECRET))) {
+        return new Response("invalid signature", { status: 401 });
+      }
+      try {
+        const payload = JSON.parse(body);
+        if (!Array.isArray(payload.events)) return new Response("invalid events", { status: 400 });
+        if (!payload.events.length) return new Response("OK");
+      } catch (_) {
+        return new Response("invalid JSON", { status: 400 });
+      }
+    } else {
       return new Response("not found", { status: 404 });
     }
-
-    const body = await request.text();
-    const payload = JSON.parse(body);
-    const signature = request.headers.get("x-line-signature") || "";
-    if (!Array.isArray(payload.events) || payload.events.length === 0) {
-      return new Response("OK", { status: 200 });
-    }
-    if (!(await verifyLineSignature(body, signature, env.LINE_CHANNEL_SECRET))) {
-      console.log(`bad signature: events=${payload.events.length}, bodyLength=${body.length}, signatureLength=${signature.length}`);
-    }
-
-    try {
-      for (const event of payload.events) {
-        await handleEvent(event, env, url.origin, ctx);
-      }
-    } catch (error) {
-      console.log(`event handling error: ${error?.name || "Error"}: ${error?.message || error}`);
-      return new Response("event handling error", { status: 500 });
-    }
-    return new Response("OK", { status: 200 });
+    if (!env.BOT_COORDINATOR) return new Response("storage not configured", { status: 503 });
+    return env.BOT_COORDINATOR.get(env.BOT_COORDINATOR.idFromName("steel-bot")).fetch(request);
   },
 
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(flushPendingNotifications(env, { limit: 5 }));
+    ctx.waitUntil(env.BOT_COORDINATOR.get(env.BOT_COORDINATOR.idFromName("steel-bot"))
+      .fetch("https://internal/flush", { method: "POST" }));
   }
 };
+
+export class BotCoordinator {
+  constructor(state, env) {
+    this.state = state;
+    this.env = { ...env, STEEL_BOT_KV: new DurableStore(state.storage, env.STEEL_BOT_KV), INTERNALLY_AUTHORIZED: true };
+    this.tail = Promise.resolve();
+  }
+
+  run(task) {
+    const result = this.tail.then(task);
+    this.tail = result.catch(() => {});
+    return result;
+  }
+
+  async fetch(request) {
+    return this.run(async () => {
+      const url = new URL(request.url);
+      const env = this.env;
+      if (url.pathname === "/flush") return Response.json(await flushPendingNotifications(env));
+      if (url.pathname.startsWith("/admin/")) return adminRoute(url, env);
+      const payload = await request.json();
+      for (const event of payload.events || []) {
+        const eventId = event.webhookEventId || event.message?.id;
+        if (!eventId) continue;
+        const key = `event:${eventId}`;
+        const previous = JSON.parse((await env.STEEL_BOT_KV.get(key)) || "null");
+        if (previous?.complete) continue;
+        const stateKey = event.source?.userId ? `state:${event.source.userId}` : null;
+        const before = previous?.before ?? (stateKey ? await env.STEEL_BOT_KV.get(stateKey) : null);
+        await env.STEEL_BOT_KV.put(key, JSON.stringify({ before }), { expirationTtl: 86400 * 7 });
+        if (previous && stateKey) await env.STEEL_BOT_KV.put(stateKey, before || "{}");
+        try {
+          await handleEvent(event, { ...env, EVENT_ID: eventId }, url.origin, null);
+          await env.STEEL_BOT_KV.put(key, JSON.stringify({ complete: true }), { expirationTtl: 86400 * 7 });
+        } catch (error) {
+          console.log(`event handling error: ${error?.name || "Error"}`);
+          return new Response("event handling error", { status: 500 });
+        }
+      }
+      return new Response("OK");
+    });
+  }
+
+  async alarm() {
+    await this.run(() => flushPendingNotifications(this.env));
+  }
+}
+
+async function adminRoute(url, env) {
+    if (url.pathname === "/admin/bind-owner") {
+      return adminBindOwner(url, env);
+    }
+    if (url.pathname === "/admin/test-owner") {
+      return adminTestOwner(url, env);
+    }
+    if (url.pathname === "/admin/notify-status") {
+      return adminNotifyStatus(url, env);
+    }
+    if (url.pathname === "/admin/version") {
+      return adminVersion(url, env);
+    }
+    if (url.pathname === "/admin/recent") {
+      return adminRecent(url, env);
+    }
+    if (url.pathname === "/admin/resend-latest") {
+      return adminResendLatest(url, env);
+    }
+    if (url.pathname === "/admin/flush-pending") {
+      return adminFlushPending(url, env);
+    }
+    return new Response("not found", { status: 404 });
+}
 
 async function handleEvent(event, env, origin, ctx) {
   if (event.type !== "message" || !event.source?.userId) return;
@@ -114,11 +170,18 @@ async function handleEvent(event, env, origin, ctx) {
 
   if (event.message?.type === "image" || event.message?.type === "video") {
     if (event.message.type === "image") {
+      const previous = await getState(env, uid);
       const media = await storeLineImage(event, env, origin);
+      if (!media) {
+        await reply(env, event.replyToken, uid, [text("照片暫時無法接收，請再傳一次。")]);
+        return;
+      }
+      const images = previous.waiting_photo_contact ? [...(previous.imageUrls || (previous.imageUrl ? [previous.imageUrl] : [])), media.imageUrl] : [media.imageUrl];
       await setState(env, uid, {
         waiting_photo_contact: true,
         mediaId: media?.mediaId || "",
         imageUrl: media?.imageUrl || "",
+        imageUrls: [...new Set(images)],
         imageSaved: Boolean(media?.imageUrl),
         imageReceivedAt: new Date().toISOString()
       });
@@ -156,6 +219,35 @@ async function handleEvent(event, env, origin, ctx) {
     return;
   }
 
+  if (isStartQuoteIntent(msg)) {
+    await startQuote(env, uid, event.replyToken);
+    return;
+  }
+  if (!state.waiting_address && !isValidContactInfo(msg) && (isChangePingIntent(msg) || isChangeMaterialIntent(msg) || isChangeServiceIntent(msg) || extractPing(msg))) {
+    if (await handleChangeIntent(env, uid, event.replyToken, msg, state)) return;
+  }
+  if (msg === "上一步 ↩") {
+    delete state.waiting_contact;
+    delete state.ping;
+    await goBack(env, uid, event.replyToken, state);
+    return;
+  }
+  if (isHumanHelpIntent(msg) && !isValidContactInfo(msg) && !state.waiting_address) {
+    await reply(env, event.replyToken, uid, [buttons("請點下方按鈕聯絡專人。", [{ type: "uri", label: "專人服務", uri: OWNER_LINE_URL }])]);
+    return;
+  }
+  if (isScheduleIntent(msg) && !state.waiting_address) {
+    await askAddress(env, uid, event.replyToken, state);
+    return;
+  }
+  if (state.waiting_appointment_contact) {
+    if (!isValidContactInfo(msg)) {
+      await reply(env, event.replyToken, uid, [text(invalidContactPrompt())]);
+      return;
+    }
+    await askAddress(env, uid, event.replyToken, { contact: msg });
+    return;
+  }
   if (state.waiting_contact) {
     await handleQuoteContact(env, uid, event.replyToken, msg, state, ctx);
     return;
@@ -166,7 +258,7 @@ async function handleEvent(event, env, origin, ctx) {
     return;
   }
 
-  if (msg === "我的id") {
+  if (msg === "我的id" && await isOwner(env, uid)) {
     await reply(env, event.replyToken, uid, [text(`您的 ID：${uid}`)]);
     return;
   }
@@ -178,27 +270,18 @@ async function handleEvent(event, env, origin, ctx) {
     return;
   }
 
-  if (isStartQuoteIntent(msg)) {
-    await startQuote(env, uid, event.replyToken);
-    return;
-  }
-
-  if (isScheduleIntent(msg)) {
-    await askAddress(env, uid, event.replyToken, state);
-    return;
-  }
-
   if (state.waiting_address) {
     const lead = {
       type: "預約勘場",
       userId: uid,
       contact: state.contact || "",
-      address: msg
+      address: msg,
+      confirmation: "已將您的聯絡資料與勘場地址轉告老闆，我們會儘快與您確認時間。"
     };
     // 先把單子寫進 KV，後面不管回覆或推播失敗，勘場需求都不會消失。
     const savedLead = await recordLeadSafely(env, lead);
     await reply(env, event.replyToken, uid, [
-      text("收到！我們會儘快安排專人與您聯繫確認勘場時間 😊")
+      text("收到您的勘場地址，正在轉交老闆。")
     ]);
     await setState(env, uid, { post_quote: true, contact: state.contact || "" });
     await scheduleLeadNotify(env, savedLead || pendingLead(lead), ctx);
@@ -323,7 +406,8 @@ async function handleQuoteContact(env, uid, replyToken, msg, state, ctx) {
     service: state.service,
     material: state.material,
     ping: state.ping,
-    total: quoteTotal(state.service, state.material, state.ping)
+    total: quoteTotal(state.service, state.material, state.ping),
+    confirmation: "已將您的估價需求與聯絡資料轉告老闆，我們會儘快與您聯繫。"
   };
   // 1) 詢問單先落地。這是最不能掉的東西，排在任何送訊息之前。
   const reuseLead = state.pendingLeadId && state.contact === msg;
@@ -331,7 +415,7 @@ async function handleQuoteContact(env, uid, replyToken, msg, state, ctx) {
 
   // 2) 再回覆客人。reply token 有效期很短，不要被推播老闆的流程卡住。
   const delivered = await reply(env, replyToken, uid, [
-    buttons("收到！已將您的估價需求通知專人，我們會儘快與您聯繫 😊", [
+    buttons("收到您的聯絡資料，正在將估價需求轉交老闆。", [
       { type: "message", label: "預約勘場", text: "預約勘場" },
       { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
     ], ["繼續估價"])
@@ -357,13 +441,17 @@ async function handleMediaContact(env, uid, replyToken, msg, state, ctx) {
     userId: uid,
     contact: msg,
     imageUrl: state.imageUrl || "",
-    imageSaved: Boolean(state.imageUrl)
+    imageUrls: state.imageUrls || (state.imageUrl ? [state.imageUrl] : []),
+    imageSaved: Boolean(state.imageUrl),
+    confirmation: state.waiting_photo_contact
+      ? "已將您的照片與聯絡資料轉告老闆，我們會儘快與您聯繫。"
+      : "已將您的影片詢問與聯絡資料轉告老闆，我們會儘快與您聯繫。"
   };
   const reuseLead = state.pendingLeadId && state.contact === msg;
   const savedLead = reuseLead ? null : await recordLeadSafely(env, lead);
 
   const delivered = await reply(env, replyToken, uid, [
-    buttons("收到！已將照片與聯絡資料通知專人，我們會儘快與您聯繫 😊", [
+    buttons("收到您的聯絡資料，正在將需求轉交老闆。", [
       { type: "message", label: "預約勘場", text: "預約勘場" },
       { type: "uri", label: "專人服務", uri: OWNER_LINE_URL }
     ], ["繼續估價"])
@@ -407,7 +495,7 @@ function formatQuote(service, material, ping) {
     "─────────────",
     `項目：${service}`,
     `材質：${material}`,
-    `坪數：${Math.trunc(ping)}坪`,
+    `坪數：${ping}坪`,
     "─────────────",
     `💰 預估總價：${total.toLocaleString("zh-TW")} 元`,
     "─────────────",
@@ -489,11 +577,19 @@ async function startQuote(env, uid, replyToken) {
 }
 
 async function askAddress(env, uid, replyToken, state = {}) {
+  if (!isValidContactInfo(state.contact)) {
+    await setState(env, uid, { waiting_appointment_contact: true });
+    await reply(env, replyToken, uid, [text(CONTACT_PROMPT)]);
+    return;
+  }
   await setState(env, uid, {
     ...state,
     waiting_address: true,
     post_quote: false,
     waiting_contact: false,
+    waiting_photo_contact: false,
+    waiting_video_contact: false,
+    waiting_appointment_contact: false,
     contact: state.contact || ""
   });
   await reply(env, replyToken, uid, [text("請留下詳細地址，我們將安排專人與您聯繫 😊\n（例如：台北市大安區XX路XX號X樓）")]);
@@ -650,7 +746,7 @@ function extractPing(message) {
   const value = String(message || "");
   if (isPingRangeText(value)) return null;
 
-  const match = value.match(/(\d{1,3})(?:坪|p|P)/);
+  const match = value.match(/(?<![\d.])(\d{1,3}(?:\.\d{1,2})?)(?:坪|p|P)/);
   if (!match) return null;
   const ping = Number(match[1]);
   if (!Number.isFinite(ping) || ping <= 0 || ping > 300) return null;
@@ -679,9 +775,9 @@ function isOwnerBindIntent(message) {
 }
 
 async function bindOwner(env, uid, replyToken, message) {
-  const code = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
-  if (!code || !String(message || "").includes(code)) {
-    await reply(env, replyToken, uid, [text(`請輸入：綁定老闆 ${code}\n或：綁定老闆ID U開頭的LINE_ID ${code}`)]);
+  const code = String(env.OWNER_BIND_CODE || "").trim();
+  if (!(await isOwner(env, uid)) || !code || !timingSafeEqual(String(message || "").trim().split(/\s+/).at(-1), code)) {
+    await reply(env, replyToken, uid, [text("通知帳號請由管理者設定。")]);
     return;
   }
 
@@ -827,7 +923,11 @@ async function adminRecent(url, env) {
       hasImageUrl: Boolean(enriched.imageUrl),
       notified: typeof enriched.notified === "boolean" ? enriched.notified : null,
       notifyStatus: enriched.notifyStatus || "",
-      notifyMessage: enriched.notifyMessage || ""
+      notifyMessage: enriched.notifyMessage || "",
+      queueStatus: enriched.queueStatus || "legacy",
+      attempts: enriched.attempts || 0,
+      customerConfirmed: Boolean(enriched.customerConfirmed),
+      photoCount: (enriched.imageUrls || (enriched.imageUrl ? [enriched.imageUrl] : [])).length
     };
   }));
 
@@ -841,7 +941,7 @@ async function adminRecent(url, env) {
 }
 
 async function enrichLeadFromKey(env, lead) {
-  if (!lead?.key || (lead.notifyMessage && lead.notifyStatus !== "queued")) return lead;
+  if (!lead?.key) return lead;
   try {
     const raw = await env.STEEL_BOT_KV.get(lead.key);
     if (!raw) return lead;
@@ -903,9 +1003,7 @@ async function adminFlushPending(url, env) {
 }
 
 function isAdminRequest(url, env) {
-  const expectedCode = String(env.OWNER_BIND_CODE || OWNER_BIND_CODE_FALLBACK).trim();
-  const code = String(url.searchParams.get("code") || "").trim();
-  return Boolean(expectedCode) && code === expectedCode;
+  return env.INTERNALLY_AUTHORIZED === true;
 }
 
 async function ownerLineIds(env) {
@@ -932,26 +1030,6 @@ function extractLineUserId(message) {
   return match ? match[0] : "";
 }
 
-async function notifyLeadSafely(env, lead) {
-  try {
-    return await notifyLead(env, lead);
-  } catch (error) {
-    await setLastNotifyStatus(env, {
-      ok: false,
-      status: 0,
-      message: `通知例外：${error?.message || error}`
-    });
-    console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
-    return false;
-  }
-}
-
-async function notifyLead(env, lead) {
-  const savedLead = await recordLead(env, lead);
-  const result = await sendAndMarkLead(env, savedLead);
-  return result.ok;
-}
-
 function pendingLead(lead) {
   return {
     ...lead,
@@ -961,192 +1039,47 @@ function pendingLead(lead) {
   };
 }
 
-// KV 寫入失敗不可以連帶把客人的確認訊息一起吃掉：記錄失敗就回 null，
-// 呼叫端仍然會回覆客人，也仍然會直接推播老闆（只是少了這筆稽核紀錄）。
+// Persist before acknowledging so webhook redelivery can recover storage failures.
 async function recordLeadSafely(env, lead) {
-  try {
-    return await recordLead(env, pendingLead(lead));
-  } catch (error) {
-    console.log(`lead record failed: ${error?.name || "Error"}: ${error?.message || error}`);
-    return null;
-  }
+  return recordLead(env, pendingLead(lead));
 }
 
-// 推播老闆放在背景跑，不擋住回覆客人；沒有 ctx 時才同步等待。
+// Alarms deliver persisted jobs after the customer request completes.
 async function scheduleLeadNotify(env, lead, ctx) {
-  const notifyTask = sendAndMarkLead(env, lead);
-  if (ctx?.waitUntil) {
-    ctx.waitUntil(notifyTask);
-    return;
-  }
-  await notifyTask;
-}
-
-async function queueLeadNotification(env, lead, ctx) {
-  const savedLead = await recordLead(env, pendingLead(lead));
-  await scheduleLeadNotify(env, savedLead, ctx);
-  return savedLead;
-}
-
-async function sendAndMarkLead(env, lead) {
-  try {
-    await updateLeadNotifyResult(env, lead, {
-      ok: false,
-      status: "sending",
-      message: "正在推播老闆 LINE",
-      successCount: 0,
-      targetCount: (await ownerLineIds(env)).length
-    });
-    const result = await sendLeadToOwners(env, lead);
-    await updateLeadNotifyResult(env, lead, result);
-    return result;
-  } catch (error) {
-    const result = {
-      ok: false,
-      status: 0,
-      message: `通知例外：${error?.message || error}`,
-      successCount: 0,
-      targetCount: (await ownerLineIds(env)).length
-    };
-    await setLastNotifyStatus(env, result);
-    await updateLeadNotifyResult(env, lead, result);
-    console.log(`lead notify failed: ${error?.name || "Error"}: ${error?.message || error}`);
-    return result;
-  }
+  await notificationQueue(env).enqueue(lead);
 }
 
 async function flushPendingNotifications(env, { limit = 5 } = {}) {
-  let recent = [];
-  try {
-    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
-  } catch (_) {
-    recent = [];
-  }
-
-  const pending = [];
-  for (const lead of recent) {
-    if (pending.length >= limit) break;
-    const enriched = await enrichLeadFromKey(env, lead);
-    if (isPendingLeadNotification(enriched)) pending.push(enriched);
-  }
-
-  const results = [];
-  for (const lead of pending) {
-    const result = await sendAndMarkLead(env, lead);
-    results.push({
-      id: lead.id,
-      createdAt: lead.createdAt,
-      contact: lead.contact || "",
-      ok: result.ok,
-      status: result.status,
-      message: result.message
-    });
-  }
-
-  return {
-    ok: true,
-    checked: recent.length,
-    pending: pending.length,
-    results
-  };
-}
-
-function isPendingLeadNotification(lead) {
-  if (!lead?.id || lead.notified === true) return false;
-  const status = lead.notifyStatus;
-  if (status === "queued" || status === "sending" || status === "retrying") return true;
-  if (status === 0 || status === "0") return true;
-  return false;
+  return notificationQueue(env).flush(limit);
 }
 
 async function sendLeadToOwners(env, lead) {
-  const textResult = await pushOwnerMessagesDetailed(env, [text(ownerLeadMessage(lead))]);
-  if (!textResult.ok) return textResult;
-
-  if (!lead.imageUrl) return textResult;
-
-  const imageResult = await pushOwnerMessagesDetailed(env, [image(lead.imageUrl)]);
-  const combined = imageResult.ok
-    ? {
-        ok: true,
-        status: 200,
-        message: `${textResult.message}; image sent`,
-        successCount: textResult.successCount,
-        targetCount: textResult.targetCount
-      }
-    : {
-        ok: true,
-        status: 207,
-        message: `${textResult.message}; image failed: ${imageResult.message}`,
-        successCount: textResult.successCount,
-        targetCount: textResult.targetCount
-      };
-  await setLastNotifyStatus(env, combined);
-  return combined;
+  return notificationQueue(env).deliver(lead);
 }
 
 async function recordLead(env, lead) {
-  const createdAt = formatTaipeiTime(new Date());
-  const id = crypto.randomUUID();
-  const key = `lead:${Date.now()}:${id}`;
-  const item = {
-    id,
-    key,
-    createdAt,
-    ...lead
-  };
+  return notificationQueue(env).record(lead);
+}
 
-  await env.STEEL_BOT_KV.put(key, JSON.stringify(item), {
-    expirationTtl: 60 * 60 * 24 * 180
+function notificationQueue(env) {
+  return new NotificationQueue(env, {
+    owners: () => ownerLineIds(env),
+    send: (messages, key, targets) => pushOwnerMessagesDetailed(env, messages, key, targets),
+    confirm: (uid, messages, key) => pushToUser(env, uid, messages, key),
+    message: ownerLeadMessage,
+    time: formatTaipeiTime,
+    onConfirmed: async lead => {
+      const state = await getState(env, lead.userId);
+      if (state.pendingLeadId === lead.id) {
+        await setState(env, lead.userId, { ...state, post_quote: true, waiting_contact: false, waiting_photo_contact: false, waiting_video_contact: false, pendingLeadId: "" });
+      }
+    }
   });
-
-  let recent = [];
-  try {
-    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
-  } catch (_) {
-    recent = [];
-  }
-  recent.unshift(item);
-  await env.STEEL_BOT_KV.put("lead:recent", JSON.stringify(recent.slice(0, 20)), {
-    expirationTtl: 60 * 60 * 24 * 180
-  });
-
-  return item;
 }
 
 async function updateLeadNotifyResult(env, leadOrId, result) {
-  const leadId = typeof leadOrId === "string" ? leadOrId : leadOrId?.id;
-  if (!leadId) return;
-
-  if (typeof leadOrId === "object" && leadOrId.key) {
-    const updatedLead = withNotifyResult(leadOrId, result);
-    await env.STEEL_BOT_KV.put(leadOrId.key, JSON.stringify(updatedLead), {
-      expirationTtl: 60 * 60 * 24 * 180
-    });
-  }
-
-  let recent = [];
-  try {
-    recent = JSON.parse((await env.STEEL_BOT_KV.get("lead:recent")) || "[]");
-  } catch (_) {
-    recent = [];
-  }
-
-  const index = recent.findIndex((lead) => lead.id === leadId);
-  if (index < 0) return;
-
-  const updated = withNotifyResult(recent[index], result);
-  recent[index] = updated;
-
-  await env.STEEL_BOT_KV.put("lead:recent", JSON.stringify(recent.slice(0, 20)), {
-    expirationTtl: 60 * 60 * 24 * 180
-  });
-
-  if (updated.key) {
-    await env.STEEL_BOT_KV.put(updated.key, JSON.stringify(updated), {
-      expirationTtl: 60 * 60 * 24 * 180
-    });
-  }
+  if (result.lead) await notificationQueue(env).save(result.lead);
+  else if (leadOrId?.key) await notificationQueue(env).save(withNotifyResult(leadOrId, result));
 }
 
 function withNotifyResult(lead, result) {
@@ -1232,7 +1165,7 @@ function leadSummaryLines(lead) {
   }
   if (lead.type === "照片詢問") {
     lines.push(lead.imageSaved ? "照片：已附上" : "照片：暫存失敗，請客戶重傳");
-    if (lead.imageUrl) lines.push(`照片連結：${lead.imageUrl}`);
+    for (const url of lead.imageUrls || (lead.imageUrl ? [lead.imageUrl] : [])) lines.push(`照片連結：${url}`);
   }
   if (lead.type === "影片詢問") {
     lines.push("影片：LINE 影片無法直接轉傳，請聯絡客戶確認");
@@ -1273,14 +1206,15 @@ async function reply(env, replyToken, uid, messages) {
   }
 
   // reply token 失效或連線失敗時，push 不需要 token，仍可把訊息送到客人手上。
-  const pushResult = await pushToUser(env, uid, messages);
+  const key = await retryKey(`reply:${env.EVENT_ID || replyToken}:${JSON.stringify(messages)}`);
+  const pushResult = await pushToUser(env, uid, messages, key);
   console.log(`LINE reply fallback push to ${maskLineId(uid)}: ok=${pushResult.ok} status=${pushResult.status} ${pushResult.message}`);
   if (pushResult.ok) {
     return { ok: true, status: 200, message: `reply failed (${result.status}), delivered via push` };
   }
 
   if (isPayloadRejection(pushResult)) {
-    const plainPush = await pushToUser(env, uid, plain);
+    const plainPush = await pushToUser(env, uid, plain, await retryKey(`${key}:plain`));
     console.log(`LINE plain push to ${maskLineId(uid)}: ok=${plainPush.ok} status=${plainPush.status} ${plainPush.message}`);
     if (plainPush.ok) {
       return { ok: true, status: 200, message: `reply and rich push rejected, delivered as plain push` };
@@ -1328,7 +1262,10 @@ async function sendReply(env, replyToken, messages) {
         body: JSON.stringify({ replyToken, messages })
       }, 8000);
 
-      if (response.ok) return { ok: true, status: response.status, message: "" };
+      if (response.ok) {
+        await response.text();
+        return { ok: true, status: response.status, message: "" };
+      }
 
       const body = await response.text();
       last = { ok: false, status: response.status, message: body.slice(0, 300) };
@@ -1344,18 +1281,22 @@ async function sendReply(env, replyToken, messages) {
   return last;
 }
 
-async function pushToUser(env, uid, messages) {
+async function pushToUser(env, uid, messages, key) {
   try {
     const response = await fetchWithTimeout("https://api.line.me/v2/bot/message/push", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${lineAccessToken(env)}`
+        authorization: `Bearer ${lineAccessToken(env)}`,
+        ...(key ? { "X-Line-Retry-Key": key } : {})
       },
       body: JSON.stringify({ to: uid, messages })
     }, 8000);
 
-    if (response.ok) return { ok: true, status: response.status, message: "" };
+    if (response.ok || (response.status === 409 && response.headers.get("x-line-accepted-request-id"))) {
+      await response.text();
+      return { ok: true, status: 200, message: "訊息已接受" };
+    }
     const body = await response.text();
     return { ok: false, status: response.status, message: body.slice(0, 300) };
   } catch (error) {
@@ -1372,8 +1313,8 @@ async function pushOwnerMessages(env, messages) {
   return result.ok;
 }
 
-async function pushOwnerMessagesDetailed(env, messages) {
-  const targets = await ownerLineIds(env);
+async function pushOwnerMessagesDetailed(env, messages, key, selectedTargets) {
+  const targets = selectedTargets || await ownerLineIds(env);
   if (!targets.length) {
     const result = {
       ok: false,
@@ -1398,7 +1339,8 @@ async function pushOwnerMessagesDetailed(env, messages) {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: `Bearer ${lineAccessToken(env)}`
+          authorization: `Bearer ${lineAccessToken(env)}`,
+          ...(key ? { "X-Line-Retry-Key": key } : {})
         },
         body: JSON.stringify({ to: ownerLineId, messages })
       }, 8000);
@@ -1409,7 +1351,8 @@ async function pushOwnerMessagesDetailed(env, messages) {
       continue;
     }
     lastStatus = response.status;
-    if (response.ok) {
+    if (response.ok || (response.status === 409 && response.headers.get("x-line-accepted-request-id"))) {
+      await response.text();
       successCount += 1;
       continue;
     }
@@ -1475,7 +1418,9 @@ async function checkLineToken(env) {
 }
 
 async function storeLineImage(event, env, origin) {
-  const mediaId = crypto.randomUUID();
+  const mediaId = await retryKey(`media:${event.message.id}`);
+  const existing = await env.STEEL_BOT_KV.getWithMetadata(`media:${mediaId}`, "arrayBuffer");
+  if (existing.value) return { mediaId, imageUrl: `${origin}/media/${mediaId}` };
   const response = await fetch(`https://api-data.line.me/v2/bot/message/${event.message.id}/content`, {
     headers: { authorization: `Bearer ${lineAccessToken(env)}` }
   });
@@ -1546,3 +1491,5 @@ function timingSafeEqual(a, b) {
   for (let i = 0; i < a.length; i += 1) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return result === 0;
 }
+
+export { handleEvent, quoteTotal, isValidContactInfo };

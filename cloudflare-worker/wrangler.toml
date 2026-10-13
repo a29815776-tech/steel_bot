@@ -18,3 +18,11 @@ invocation_logs = true
 [[kv_namespaces]]
 binding = "STEEL_BOT_KV"
 id = "de74cd985c2146a09329cb9a7148650a"
+
+[[durable_objects.bindings]]
+name = "BOT_COORDINATOR"
+class_name = "BotCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BotCoordinator"]
